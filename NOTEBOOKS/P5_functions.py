@@ -7,6 +7,8 @@ def print_null_pct(df):
 
 # Displaying number of missing values per column
 
+import matplotlib.pyplot as plt
+
 def plot_export_missing(df, cols, n_file, title,
                         shorten_label=False, figsize=(12,8), save_enabled=False):
     with plt.style.context('default'):
@@ -52,3 +54,10 @@ def move_cat_containing(my_index, strings, order='last'):
 	for c in to_move:
 	    mod_index = mod_index.insert(rank,c)
 	return mod_index if order=='last' else mod_index[::-1]
+
+''' Function that computes the mean for Timedeltas'''
+
+from datetime import timedelta
+
+def mean_tdeltas(ser_td) :
+    return sum(ser_td, timedelta(0)) / len(ser_td)
