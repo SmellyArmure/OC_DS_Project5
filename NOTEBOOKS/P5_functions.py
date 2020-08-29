@@ -165,9 +165,9 @@ class CustTransformer(BaseEstimator) :
 
         # categorical encoding
         list_trans=[] # dictionnaire des transfo categorielles EXISTANTES
-        for k, v in d_type_col(X).items():
+        for k, v in self.d_type_col(X).items():
             if k!='numeric':
-                list_trans.append((k,d_enc[dict_enc_strat[k]], v))
+                list_trans.append((k,d_enc[self.dict_enc_strat[k]], v))
 
         self.ct_cat = ColumnTransformer(list_trans)
 
@@ -188,14 +188,10 @@ class CustTransformer(BaseEstimator) :
                 ('cat', self.cat_trans, self.cat_cols)])
 
         return self.column_trans.fit(X, y)
-  
-    # def transform(self, X, y=None): # to use in a pipeline
+
+    # OLD VERSION WITHOUT NAME OF THE COLUMNS, OUTPUT AS A NP.ARRAY
+    # def transform(self, X, y=None): 
     #     return  self.column_trans.transform(X)
-
-    def transform(self, X, y=None): # to get a dataframe
-        return pd.DataFrame(self.column_trans.transform(X),
-                            columns=self.get_feature_names(X, y))
-
     # def fit_transform(self, X, y=None):
     #     if y is None:
     #         self.fit(X)
@@ -203,6 +199,10 @@ class CustTransformer(BaseEstimator) :
     #     else:
     #         self.fit(X, y)
     #         return self.column_trans.transform(X)
+
+    def transform(self, X, y=None): # to get a dataframe
+        return pd.DataFrame(self.column_trans.transform(X),
+                            columns=self.get_feature_names(X, y))
 
     def fit_transform(self, X, y=None):
         if y is None:  
@@ -328,6 +328,44 @@ def scree_plot(col_names, exp_var_rat, ylim=(0, 0.4), figsize=(8, 3)):
     plt.title('Scree plot', fontweight='bold')
 
 
+''' displays the lines on the first axis of a pca'''
+
+def display_factorial_planes(X_proj, n_comp, pca, axis_ranks, labels=None,
+                             width=16, alpha=1, n_cols=3, illus_var=None,
+                             lab_on=True, size=10):
+    n_rows = (n_comp+1)//n_cols
+    fig = plt.figure(figsize=(width,n_rows*width/n_cols))
+    # boucle sur chaque plan factoriel
+    for i, (d1,d2) in (enumerate(axis_ranks)):
+        if d2 < n_comp:
+            ax = fig.add_subplot(n_rows, n_cols, i+1)
+            # points
+            if illus_var is None:
+                ax.scatter(X_proj[:, d1], X_proj[:, d2], alpha=alpha, s=size)
+            else:
+                illus_var = np.array(illus_var)
+                for value in np.unique(illus_var):
+                    sel = np.where(illus_var == value)
+                    ax.scatter(X_proj[sel, d1], X_proj[sel, d2], 
+                                alpha=alpha, label=value)
+                ax.legend()
+            # labels points
+            if labels is not None and lab_on:
+                for i,(x,y) in enumerate(X_proj[:,[d1,d2]]):
+                    ax.text(x, y, labels[i],
+                              fontsize='14', ha='center',va='center')   
+            # limites
+            bound = np.max(np.abs(X_proj[:, [d1,d2]])) * 1.1
+            ax.set(xlim=(-bound,bound), ylim=(-bound,bound))
+            # lignes horizontales et verticales
+            ax.plot([-100, 100], [0, 0], color='grey', ls='--')
+            ax.plot([0, 0], [-100, 100], color='grey', ls='--')
+            # nom des axes, avec le pourcentage d'inertie expliqué
+            ax.set_xlabel('F{} ({}%)'.format(d1+1, round(100*pca.explained_variance_ratio_[d1],1)))
+            ax.set_ylabel('F{} ({}%)'.format(d2+1, round(100*pca.explained_variance_ratio_[d2],1)))
+            ax.set_title("Projection des individus (sur F{} et F{})".format(d1+1, d2+1))
+    plt.tight_layout()
+
 
 '''Aggregate all the orders of one unique customer
 to get a database of customers
@@ -336,14 +374,25 @@ If no min and max time given, aggregates on the whole df_order
 '''
 
 def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally useful
+    
+    df_orders_mod = df_orders.copy('deep')
+    # Changes the type of data
+    df_orders_mod[['order_purchase_timestamp', 'max_limit_ship_date']] =\
+        df_orders_mod[['order_purchase_timestamp', 'max_limit_ship_date']]\
+        .apply(lambda x: pd.to_datetime(x))
+    df_orders_mod[['shipping_time', 'shipping_delay']] = \
+        df_orders_mod[['shipping_time', 'shipping_delay']]\
+        .apply(lambda x: pd.to_timedelta(x))
+    df_orders_mod['customer_zip_code_prefix'] = \
+        df_orders_mod['customer_zip_code_prefix'].astype('object')
 
     if t_min is None:
-        t_min = df_orders['order_purchase_timestamp'].min()
+        t_min = df_orders_mod['order_purchase_timestamp'].min()
     if t_max is None:
-        t_max = df_orders['order_purchase_timestamp'].max()
+        t_max = df_orders_mod['order_purchase_timestamp'].max()
 
-    mask_time = df_orders['order_purchase_timestamp'].between(t_min, t_max)
-    df = df_orders[mask_time].reset_index()
+    mask_time = df_orders_mod['order_purchase_timestamp'].between(t_min, t_max)
+    df = df_orders_mod[mask_time].reset_index()
 
     def most_freq_cat(x): return x if x.size == 1 else x.value_counts().idxmax()
 
@@ -385,12 +434,12 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
     agg_dict = dict(set(agg_dict_1.items()) | set(agg_dict_2.items()))
 
     # Aggregate the orders of each unique customer
-    df_agg = df.groupby('customer_unique_id').agg(**agg_dict)
+    df_cust = df.groupby('customer_unique_id').agg(**agg_dict)
 
-    df_agg['cust_zipcode'] = df_agg['cust_zipcode'].astype('object')
+    df_cust['cust_zipcode'] = df_cust['cust_zipcode'].astype('object')
 
     # Changes the order of the columns
-    cols = move_cat_containing(df_agg.columns, ['time', 'delay'], 'first')
+    cols = move_cat_containing(df_cust.columns, ['time', 'delay'], 'first')
     cols = move_cat_containing(cols, ['ord'], 'first')
     cols = move_cat_containing(cols, ['price', 'frei'], 'first')
     cols = move_cat_containing(cols, ['item'], 'first')
@@ -399,18 +448,8 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
     cols = move_cat_containing(cols, ['pay_type'], 'last')
     cols = move_cat_containing(cols, ['cat_'], 'last')
     
-    # Changes the type of data
-    df_agg[['order_purchase_timestamp', 'max_limit_ship_date']] = \
-	    df_agg[['order_purchase_timestamp', 'max_limit_ship_date']]\
-	        .apply(lambda x: pd.to_datetime(x))
-    df_agg[['shipping_time', 'shipping_delay']] = \
-	    df_agg[['shipping_time', 'shipping_delay']]\
-	        .apply(lambda x: pd.to_timedelta(x))
-    df_agg['cust_zipcode'] = \
-	    df_agg['cust_zipcode'].astype('object')
-    
-    df_agg = df_agg[cols]
-    return df_agg
+    df_cust = df_cust[cols]
+    return df_cust
 
 ''' Function that create the new features in the df_cust dataframe'''
 
