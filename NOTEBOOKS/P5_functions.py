@@ -383,8 +383,8 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
     df_orders_mod[['shipping_time', 'shipping_delay']] = \
         df_orders_mod[['shipping_time', 'shipping_delay']]\
         .apply(lambda x: pd.to_timedelta(x))
-    df_orders_mod['customer_zip_code_prefix'] = \
-        df_orders_mod['customer_zip_code_prefix'].astype('object')
+    df_orders_mod['cust_region'] = \
+        df_orders_mod['cust_region'].astype('object')
 
     if t_min is None:
         t_min = df_orders_mod['order_purchase_timestamp'].min()
@@ -398,9 +398,10 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
 
     # Dictionary for the aggregation of the main values and times
     agg_dict_1 = {
-                'cust_zipcode': ('customer_zip_code_prefix', np.max),
-                'cust_city': ('customer_city', np.max),
-                'cust_state': ('customer_state', np.max),
+                # 'cust_zipcode': ('customer_zip_code_prefix', np.max),
+                # 'cust_city': ('customer_city', np.max),
+                # 'cust_state': ('customer_state', np.max),
+                'cust_region': ('cust_region', np.max),
                 'tot_nb_ord': ('order_id', np.size),
                 'tot_nb_deliv_ord': ('delivered', np.sum),
                 'time_since_last_purch': ('order_purchase_timestamp',
@@ -412,6 +413,8 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
                 'tot_nb_items': ('order_item_nb', np.sum),
                 'mean_nb_items_per_ord': ('order_item_nb', np.mean),
                 'mean_prod_descr_length': ('mean_prod_descr_length', np.mean),
+                'mean_prod_vol_cm3': ('product_volume_cm3', np.mean),
+                'mean_prod_wei_g': ('product_weight_g', np.mean),
                 'mean_price_per_order': ('price', np.mean),
                 'mean_freight_val_per_order': ('freight_value', np.mean),
                 'mean_pay_value_per_order': ('payment_value', np.mean),
@@ -422,8 +425,8 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
                 'mean_rev_score': ('review_score', np.mean),
                 'mean_comment_length': ('review_comment_length', np.mean),
                 'tot_comment_length': ('review_comment_length', np.sum),
-                'cum_paytype': ('cum_paytype', most_freq_cat) ,
-                'main_prod_categ': ('main_prod_categ', most_freq_cat),
+                # 'cum_paytype': ('cum_paytype', most_freq_cat) ,
+                # 'main_prod_categ': ('main_prod_categ', most_freq_cat),
                 }
     # Dictionary for the aggreagation of dummy columns (payment and categories)
     cat_cols = list(df.columns[df.columns.str.contains('cat_')])
@@ -436,7 +439,7 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
     # Aggregate the orders of each unique customer
     df_cust = df.groupby('customer_unique_id').agg(**agg_dict)
 
-    df_cust['cust_zipcode'] = df_cust['cust_zipcode'].astype('object')
+    df_cust['cust_region'] = df_cust['cust_region'].astype('object')
 
     # Changes the order of the columns
     cols = move_cat_containing(df_cust.columns, ['time', 'delay'], 'first')
@@ -469,6 +472,6 @@ def create_features_cust_df(df_cust):
     df_cust_mod.insert(loc=12, column='nb_not_rec_orders', value=ser)
 
     # Average freight on payment value ratio
-    ser = df_cust_mod['tot_freight_val']/df_cust_mod['tot_pay_value']
+    ser = df_cust_mod['tot_freight_val']/(df_cust_mod['tot_pay_value']+1)
     df_cust_mod.insert(loc=8, column='avg_freight_payval_ratio', value=ser.fillna(0))
     return df_cust_mod
