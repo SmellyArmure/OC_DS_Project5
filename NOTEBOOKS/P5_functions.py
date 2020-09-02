@@ -97,7 +97,6 @@ df_enc = cust_trans.transform(small_df)
 cust_trans.get_feature_names(small_df)
 
 '''
-
 from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -124,8 +123,11 @@ class CustTransformer(BaseEstimator) :
     def d_type_col(self, X):
         bin_cols = (X.nunique()[X.nunique()<=2].index)
         X_C_cols = X.select_dtypes(include=['object', 'category'])
-        C_l_card_cols = X_C_cols.nunique()[X_C_cols.nunique().between(3, self.thresh_card)].index
-        C_h_card_cols = X_C_cols.nunique()[X_C_cols.nunique()>self.thresh_card].index
+        C_l_card_cols = \
+            X_C_cols.nunique()[X_C_cols.nunique()\
+                                    .between(3,self.thresh_card)].index
+        C_h_card_cols = \
+            X_C_cols.nunique()[X_C_cols.nunique()>self.thresh_card].index
         Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns\
                                                         if c not in bin_cols]
         d_t = {'binary': bin_cols,
@@ -133,14 +135,20 @@ class CustTransformer(BaseEstimator) :
                'high_card': C_h_card_cols,
                'numeric': Q_cols}
         d_t = {k:v for k,v in d_t.items() if len(v)}
+        # print(d_t)
         return d_t
 
     def get_feature_names(self, X, y=None):
-        self.ct_cat.fit(X, y)
-        if self.num_cols is not np.nan:
+        if self.has_num and self.has_cat:
+            self.ct_cat.fit(X, y)
             cols = self.ct_cat.get_feature_names() + self.num_cols
-        else:
+        elif self.has_num and not self.has_cat:
+            cols = self.num_cols
+        elif not self.has_num and self.has_cat:
+            self.ct_cat.fit(X, y)
             cols = self.ct_cat.get_feature_names()
+        else:
+            cols=None
         return cols
 
     def fit(self, X, y=None):
@@ -163,29 +171,40 @@ class CustTransformer(BaseEstimator) :
                                              inverse_func=lambda x:x),
                  }
 
-        # categorical encoding
-        list_trans=[] # dictionnaire des transfo categorielles EXISTANTES
-        for k, v in self.d_type_col(X).items():
-            if k!='numeric':
-                list_trans.append((k,d_enc[self.dict_enc_strat[k]], v))
-
-        self.ct_cat = ColumnTransformer(list_trans)
-
-        self.cat_cols = []
-        for k,v in self.d_type_col(X).items():
-            if k!='numeric': self.cat_cols += (list(v))
-        self.cat_trans = Pipeline([("categ", self.ct_cat)])
-
-        # numerical transformers
-        self.num_cols = self.d_type_col(X).get('numeric', np.nan)
-        if self.num_cols is not np.nan:
+        # # dictionnaire liste des transfo categorielles EXISTANTES
+        d_t = self.d_type_col(X)
+        # numerics
+        self.has_num = ('numeric' in d_t.keys())
+        # categoricals
+        self.has_cat = len([s for s in d_t.keys() if s in ['binary','low_card','high_card']])>0
+        if self.has_cat:
+            list_trans=[] # dictionnaire des transfo categorielles EXISTANTES
+            for k, v in d_t.items():
+                if k!='numeric':
+                    list_trans.append((k,d_enc[self.dict_enc_strat[k]], v))
+                    
+            self.cat_cols = [] # liste des colonnes catégorielles à transformer
+            for k,v in self.d_type_col(X).items():
+                if k!='numeric': self.cat_cols += (list(v))
+                
+            self.ct_cat = ColumnTransformer(list_trans)
+            self.cat_trans = Pipeline([("categ", self.ct_cat)])
+            
+        if self.has_num:
             self.num_trans = Pipeline([("numeric", d_enc[self.strat_quant])])
-            self.column_trans =  ColumnTransformer([
-                ('cat', self.cat_trans, self.cat_cols),
-                ('num', self.num_trans, self.num_cols),])
-        else: # s'il n'y a pas de données numériques
-            self.column_trans =  ColumnTransformer([
-                ('cat', self.cat_trans, self.cat_cols)])
+            self.num_cols = d_t['numeric']
+
+        if self.has_num and self.has_cat:
+            self.column_trans = \
+                ColumnTransformer([('cat', self.cat_trans, self.cat_cols),
+                                   ('num', self.num_trans, self.num_cols)])
+        elif self.has_num and not self.has_cat:
+            self.column_trans = \
+                ColumnTransformer([('num', self.num_trans, self.num_cols)])
+        elif not self.has_num and self.has_cat:
+            self.column_trans = ColumnTransformer([('cat', self.cat_trans, self.cat_cols)])
+        else:
+            print("The dataframe is empty : no transformation can be done")
 
         return self.column_trans.fit(X, y)
 
@@ -208,11 +227,14 @@ class CustTransformer(BaseEstimator) :
         if y is None:  
             self.fit(X)
             return pd.DataFrame(self.column_trans.transform(X),
-                            columns=self.get_feature_names(X, y))
+                                index=X.index,
+                                columns=self.get_feature_names(X, y))
         else: 
             self.fit(X, y)
-            return pd.DataFrame(self.column_trans.transform(X,y),
-                            columns=self.get_feature_names(X, y))
+            return pd.DataFrame(self.column_trans.transform(X, y),
+                                index=X.index,
+                                columns=self.get_feature_names(X, y))
+
 
 # Plotting histograms of specified quantitative continuous columns of a dataframe and mean, median and mode values.
 
@@ -475,3 +497,49 @@ def create_features_cust_df(df_cust):
     ser = df_cust_mod['tot_freight_val']/(df_cust_mod['tot_pay_value']+1)
     df_cust_mod.insert(loc=8, column='avg_freight_payval_ratio', value=ser.fillna(0))
     return df_cust_mod
+
+    '''calculates VIF and exclude colinear columns'''
+
+from statsmodels.stats.outliers_influence import variance_inflation_factor    
+
+def select_from_vif_(X, thresh=5.0):
+    variables = list(range(X.shape[1]))
+    dropped = True
+    while dropped:
+        dropped = False
+        vif = [variance_inflation_factor(X.iloc[:, variables].values, ix)
+               for ix in range(X.iloc[:, variables].shape[1])]
+
+        maxloc = vif.index(max(vif))
+        if (max(vif) > thresh) and (len(variables)>2):
+            print("nb of var:{}, max_vif={:.3} -> dropping \'{}\'"
+                  .format(len(variables), max(vif),
+                          str(X.iloc[:, variables].columns[maxloc])))
+            del variables[maxloc]
+            dropped = True
+
+    print('Remaining variables:')
+    print(X.columns[variables])
+    return X.iloc[:, variables]
+
+'''Function that check low variance columns as a function of a variance threshold
+ and returns a dataframe of results for easy plotting'''
+
+from sklearn.feature_selection import VarianceThreshold
+
+def check_feature_variance(thresholds, df_enc):
+    n_cols = []
+    old_excl_cols = []
+    for th in thresholds:
+        v_thresh = VarianceThreshold(threshold=th)
+        df_filt = v_thresh.fit_transform(df_enc)
+        mask_col = v_thresh.get_support(indices=True)
+        excl_cols = [c for c in df_enc.columns if not c in df_enc.columns[mask_col]]
+        new_excl_cols = [c for c in excl_cols if not c in old_excl_cols]
+        old_excl_cols = excl_cols
+        n_cols.append(df_filt.shape[1])
+        print("thresh={} -> {} excluded cols and {} new ones: {}"\
+                .format(th, len(excl_cols), len(new_excl_cols), new_excl_cols))
+    df_res = pd.DataFrame({'thresh': thresholds,
+                           'n_rem_cols': n_cols})
+    return df_res
