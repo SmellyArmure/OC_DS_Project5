@@ -221,6 +221,7 @@ class CustTransformer(BaseEstimator) :
 
     def transform(self, X, y=None): # to get a dataframe
         return pd.DataFrame(self.column_trans.transform(X),
+                            index=X.index,
                             columns=self.get_feature_names(X, y))
 
     def fit_transform(self, X, y=None):
@@ -543,3 +544,307 @@ def check_feature_variance(thresholds, df_enc):
     df_res = pd.DataFrame({'thresh': thresholds,
                            'n_rem_cols': n_cols})
     return df_res
+
+'''Computes the variable reduction of the data and plots the projected data on 1, 2 or 3 axis.
+Choice of n_neibors, min_dist and metric available'''
+
+from umap import UMAP 
+
+def draw_umap(data, ser_clust=None, n_neighbors=15, min_dist=0.1, n_components=2,
+              metric='euclidean', title='', fig=None, layout=None,
+              figsize=(7,4), s=2, alpha=1, random_state=14):
+    
+    fit = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, spread=1,
+                    n_components=n_components, metric=metric,
+                    random_state= random_state)
+    u = fit.fit_transform(data)
+
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+        
+    colors = [sns.color_palette()[x] for x in ser_clust.astype('int')]\
+        if ser_clust is not None else None
+
+    layout=111 if layout is None else layout
+        
+    if n_components == 1:
+        ax = fig.add_subplot(layout)
+        ax.scatter(u[:,0], range(len(u)),
+                   s=s,  alpha=alpha, c=colors)
+    if n_components == 2:
+        ax = fig.add_subplot(layout)
+        ax.scatter(u[:,0], u[:,1],
+                   s=s, alpha=alpha, c=colors)
+    if n_components == 3:
+        ax = fig.add_subplot(layout, projection='3d')
+        ax.scatter(u[:,0], u[:,1], u[:,2],
+                   s=s,  alpha=alpha, c=colors)
+
+    plt.title(title, fontsize=12)
+
+
+''' Plots the observations on two axis with clusters coloring if available (ser_clust)
+tests for various transformations (quantile transformer)'''
+
+from sklearn.preprocessing import QuantileTransformer
+
+
+def plot_projection(df_2D, ser_clust=None, quant_transf=False,
+                    title='', figsize=(5, 3), fig=None, ax=None):
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    colors = None if ser_clust is None else \
+        [sns.color_palette()[x] for x in ser_clust.astype('int')]
+
+    if quant_transf:
+
+        ax = fig.add_subplot(131)
+        ax.scatter(df_2D.iloc[:, 0], df_2D.iloc[:, 1],
+                   s=1, alpha=0.7, c=colors)
+        ax.set_title(title + ": no transf.")
+
+        ax = fig.add_subplot(132)
+        qt = QuantileTransformer(output_distribution='normal')
+        df_2D_qtn = qt.fit_transform(df_2D)
+        ax.scatter(df_2D_qtn[:, 0], df_2D_qtn[:, 1],
+                   s=1, alpha=0.7, c=colors)
+        ax.set_title(title + ": quantile trans. (normal)")
+
+        ax = fig.add_subplot(133)
+        qt = QuantileTransformer(output_distribution='uniform')
+        df_2D_qtu = qt.fit_transform(df_2D)
+        ax.scatter(df_2D_qtu[:, 0], df_2D_qtu[:, 1],
+                   s=1, alpha=0.7, c=colors)
+        ax.set_title(title + ": quantile trans. (uniform)")
+
+    else:
+        ax = fig.add_subplot(111) if ax is None else ax
+        ax.scatter(df_2D.iloc[:, 0], df_2D.iloc[:, 1],
+                   s=1, alpha=0.7, c=colors)
+        ax.set_title(title + ": no transf.")
+
+''' Computes Silhouette, Davies-Bouldin, Calinsky-Harabasz and inertia scores
+for different number of clusters, then aggregate (mean std)
+and plot the mean scores as a function of the number of clusters,
+returns the aggregated scores as a dataframe'''
+
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+
+
+def plot_clust_scores_vs_n_clust(df, n_clust=range(2,8),
+                                 n_iter=10, figsize=(15,3)):
+
+    silh_df, dav_bould_df, cal_harab_df, distor_df = \
+        pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # --- Looping on the number of clusters to compute the scores
+    score_df_agg = pd.DataFrame()
+    for i, n in enumerate(n_clust,1):
+        silh, dav_bould, cal_harab, distor = [], [], [], []
+        # Iterations of the same model (stability)
+        for j in range(n_iter): 
+            km = KMeans(n_clusters=n, n_jobs=-1)
+            km.fit(df)
+            ser_clust = pd.Series(data=km.labels_, index=df.index)
+            # Computing scores for iterations
+            silh.append(silhouette_score(X=df,
+                                        labels=ser_clust))
+            dav_bould.append(davies_bouldin_score(X=df,
+                                        labels=ser_clust))
+            cal_harab.append(calinski_harabasz_score(X=df,
+                                        labels=ser_clust))
+            distor.append(km.inertia_)                        
+        # Dataframe of the results on iterations
+        score_df = pd.DataFrame({'Silhouette': silh,
+                                 'Davies_Bouldin': dav_bould,
+                                 'Calinsky_Harabasz': cal_harab,
+                                 'Distortion': distor})
+        # --- Aggregation of the results
+        ser_scores = score_df.agg(['mean', 'median', 'std']).unstack()\
+                        .rename(n)
+        score_df_agg = pd.concat([score_df_agg, ser_scores], axis=1)
+
+    def gen_li(name): return [(name, s) for s in ('mean', 'median', 'std')]
+    silh_df = score_df_agg.loc[gen_li('Silhouette')]
+    dav_bould_df = score_df_agg.loc[gen_li('Davies_Bouldin')]
+    cal_harab_df = score_df_agg.loc[gen_li('Calinsky_Harabasz')]
+    distor_df = score_df_agg.loc[gen_li('Distortion')]
+
+    # --- Plotting the results
+
+    fig = plt.figure(figsize=figsize)
+
+    def score_plot_vs_nb_clust(score_df, name, ax, c=None):
+        score_df.T[(name,'mean')].plot(yerr=score_df.T[(name,'std')], elinewidth=1,
+                            capsize=2, capthick=1, ecolor='k', fmt='-o',
+                            c=c, ms=5, barsabove=False, uplims=False, ax=ax)
+        
+    ax = fig.add_subplot(141)
+    score_plot_vs_nb_clust(silh_df,'Silhouette', ax, c='r')
+    ax.set_xlabel('Number of clusters')
+    ax.set_ylabel('Silhouette score')
+
+    ax = fig.add_subplot(142)
+    score_plot_vs_nb_clust(dav_bould_df,'Davies_Bouldin', ax, c='b')
+    ax.set_xlabel('Number of clusters')
+    ax.set_ylabel('Davies_Bouldin score')
+
+    ax = fig.add_subplot(143)
+    score_plot_vs_nb_clust(cal_harab_df,'Calinsky_Harabasz', ax, c='purple')
+    ax.set_xlabel('Number of clusters')
+    ax.set_ylabel('Calinsky_Harabasz score')
+
+    ax = fig.add_subplot(144)
+    score_plot_vs_nb_clust(distor_df,'Distortion', ax, c='g')
+    ax.set_xlabel('Number of clusters')
+    ax.set_ylabel('Distortion')
+
+    fig.suptitle('Clustering score vs. number of clusters',
+                fontsize=14, fontweight='bold')
+    plt.tight_layout(rect=[0,0,1,0.95])
+    plt.show()
+
+    return score_df_agg
+
+
+''' Plots on the left the silhouette scores of the clusters and
+on the right the projection of the points with cluster labels as cluster'''
+
+from sklearn.metrics import silhouette_score, silhouette_samples
+
+def silh_scores_vs_n_clust(df, n_clust, axis_2D, title='',
+                           xlim=(-0.1, 0.8), figsize=(18, 3)):
+    palette = sns.color_palette("husl", max(n_clust))
+    colors_2 = palette.as_hex()
+
+    distor = []
+    for n in n_clust:
+        fig = plt.figure(1, figsize=figsize)
+
+        # --- Plot 1: Silhouette scores
+        ax1 = fig.add_subplot(121)
+
+        km = KMeans(n_clusters=n, random_state=14)
+        ser_clust = km.fit_predict(df)
+        distor.append(km.inertia_)
+
+        sample_silh_val = silhouette_samples(df, ser_clust)
+
+        y_lower = 10
+        for i in range(n):
+            # Aggregate and sort silh scores for samples of clust i
+            ith_clust_silh_val = sample_silh_val[ser_clust == i]
+            ith_clust_silh_val.sort()
+            size_cluster_i = ith_clust_silh_val.shape[0]
+            y_upper = y_lower + size_cluster_i
+            ax1.fill_betweenx(np.arange(y_lower, y_upper),
+                              0,
+                              ith_clust_silh_val,
+                              facecolor=colors_2[i],
+                              edgecolor=colors_2[i],
+                              alpha=0.7)
+
+            # Label of silhouette plots with their clust. nb. at the middle
+            ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+
+            # Computes the new y_lower for next plot
+            y_lower = y_upper + 10  # 10 for the 0 samples
+
+        silhouette_avg = silhouette_score(df, ser_clust)
+        ax1.set_title("Nb of clusters={}, avg silhouhette score: {:.3f}" \
+                      .format(n, silhouette_avg), fontsize=12)
+        ax1.set_xlabel("The silhouette coefficient values")
+        ax1.set_ylabel("Cluster label")
+
+        # The vertical line for average silhouette score of all the values
+        ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+        ax1.set_yticks([])  # Clear the yaxis labels / ticks
+        ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
+        ax1.set_xlim(list(xlim))
+        # (n+1)*10: inserting blank spaces between clusters silh scores
+        ax1.set_ylim([0, df.shape[0] + (n + 1) * 10])
+
+        # --- Plot 1: Showing clusters on chosen projection
+        ax2 = fig.add_subplot(122)
+
+        colors = None if ser_clust is None else \
+            [sns.color_palette()[x] for x in ser_clust.astype('int')]
+
+        ax2.scatter(axis_2D.iloc[:, 0], axis_2D.iloc[:, 1],
+                    s=1, alpha=0.7, c=colors)
+        ax2.set_title(title, fontsize=12)
+
+        ### A REPARER --- TRACAGE DES CENTROIDES SUR LES GRAPHES A INCLURE dans la fonction plot_projection
+        # # Showing centers of the clusters
+        # for i in n_clust:
+        #     centers = km.cluster_centers_
+        #     ax2.scatter(centers[:, 0], centers[:, 1], centers[:, 2],
+        #                 marker='o', c="white", alpha=1, s=200, edgecolor='k')
+        #     for i, c in enumerate(centers):
+        #         ax2.scatter(c[0], c[1], c[2], marker='$%d$' % i,
+        #                     alpha=1, s=50, edgecolor='k')
+        plt.suptitle("Silhouette analysis for {} clusters".format(n),
+                     fontsize=14, fontweight='bold')
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.show()
+
+
+''' Generates the list of all unique combination of k numbers 
+(no matter the order) among a given seq list of objects'''
+
+def combinlist(seq, k):
+    p = []
+    i, imax = 0, 2**len(seq)-1
+    while i<=imax:
+        s = []
+        j, jmax = 0, len(seq)-1
+        while j<=jmax:
+            if (i>>j)&1==1:
+                s.append(seq[j])
+            j += 1
+        if len(s)==k:
+            p.append(s)
+        i += 1
+    return p
+
+
+'''Computes n_iter times the clusters (various random initialisation) then
+returns the mean and std of ARI between each unique couple of results
+2 modes:
+- 'init': initialisation stability: checks for stability of clusters for various
+random initialisation of the clustering model
+- 'samp': sampling stability: checks for stability of the clusters for differents
+sampling of the training set'''
+
+from sklearn.metrics import adjusted_rand_score
+
+def stability(model, df, n_iter=5, mode='init', n_samp=10000):
+
+    if mode == 'init':
+        multiple_ser_clust = []
+        for i in range(n_iter):
+            model.fit(df)
+            multiple_ser_clust.append(model.labels_)
+        print("--- Testing for initialisation stability \
+({} iterations) ---".format(n_iter))
+    elif mode == 'samp':
+        multiple_ser_clust = []
+        for i in range(n_iter):
+            df_samp = df.sample(n_samp)
+            model.fit(df)
+            multiple_ser_clust.append(model.labels_)
+        print("--- Testing for stability with {} lines random samples \
+(training set) ({} iterations) ---".format(n_samp, n_iter))
+
+
+    # Computes ARI scores for each pair of models
+    ARI_scores = []
+    pairs_list = combinlist(np.arange(n_iter),2)
+    for i, j in pairs_list:
+        ARI_scores.append(adjusted_rand_score(multiple_ser_clust[i],
+                                              multiple_ser_clust[j]))
+
+    # Compute the mean and standard deviation of ARI scores
+    ARI_mean, ARI_std = np.mean(ARI_scores), np.std(ARI_scores)
+    print("Evaluation of stability with random init :\n\
+        mean:{:.1f} , std: {:.1f} ".format(ARI_mean, ARI_std))
+
+    return ARI_scores
