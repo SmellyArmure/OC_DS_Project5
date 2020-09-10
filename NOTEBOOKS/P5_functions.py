@@ -105,11 +105,12 @@ from sklearn.preprocessing import *
 import numpy as np
 import pandas as pd
 
-class CustTransformer(BaseEstimator) :
+
+class CustTransformer(BaseEstimator):
 
     def __init__(self, thresh_card=12,
-                 strat_binary = 'ord', strat_low_card ='ohe',
-                 strat_high_card ='bin', strat_quant = 'stand'):
+                 strat_binary='ord', strat_low_card='ohe',
+                 strat_high_card='bin', strat_quant='stand'):
         self.thresh_card = thresh_card
         self.strat_binary = strat_binary
         self.strat_low_card = strat_low_card
@@ -121,20 +122,20 @@ class CustTransformer(BaseEstimator) :
                                'numeric': strat_quant}
 
     def d_type_col(self, X):
-        bin_cols = (X.nunique()[X.nunique()<=2].index)
+        bin_cols = (X.nunique()[X.nunique() <= 2].index)
         X_C_cols = X.select_dtypes(include=['object', 'category'])
         C_l_card_cols = \
-            X_C_cols.nunique()[X_C_cols.nunique()\
-                                    .between(3,self.thresh_card)].index
+            X_C_cols.nunique()[X_C_cols.nunique() \
+                .between(3, self.thresh_card)].index
         C_h_card_cols = \
-            X_C_cols.nunique()[X_C_cols.nunique()>self.thresh_card].index
-        Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns\
-                                                        if c not in bin_cols]
+            X_C_cols.nunique()[X_C_cols.nunique() > self.thresh_card].index
+        Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns \
+                  if c not in bin_cols]
         d_t = {'binary': bin_cols,
                'low_card': C_l_card_cols,
                'high_card': C_h_card_cols,
                'numeric': Q_cols}
-        d_t = {k:v for k,v in d_t.items() if len(v)}
+        d_t = {k: v for k, v in d_t.items() if len(v)}
         # print(d_t)
         return d_t
 
@@ -148,7 +149,7 @@ class CustTransformer(BaseEstimator) :
             self.ct_cat.fit(X, y)
             cols = self.ct_cat.get_feature_names()
         else:
-            cols=None
+            cols = None
         return cols
 
     def fit(self, X, y=None):
@@ -167,8 +168,10 @@ class CustTransformer(BaseEstimator) :
                  'quant_norm': QuantileTransformer(output_distribution='normal'),
                  'boxcox': PowerTransformer(method='boxcox'),
                  'yeo': PowerTransformer(method='yeo-johnson'),
-                 'none': FunctionTransformer(func=lambda x:x,
-                                             inverse_func=lambda x:x),
+                 'log': FunctionTransformer(func=lambda x: np.log1p(x),
+                                            inverse_func=lambda x: np.expm1(x)),
+                 'none': FunctionTransformer(func=lambda x: x,
+                                             inverse_func=lambda x: x),
                  }
 
         # # dictionnaire liste des transfo categorielles EXISTANTES
@@ -176,20 +179,20 @@ class CustTransformer(BaseEstimator) :
         # numerics
         self.has_num = ('numeric' in d_t.keys())
         # categoricals
-        self.has_cat = len([s for s in d_t.keys() if s in ['binary','low_card','high_card']])>0
+        self.has_cat = len([s for s in d_t.keys() if s in ['binary', 'low_card', 'high_card']]) > 0
         if self.has_cat:
-            list_trans=[] # dictionnaire des transfo categorielles EXISTANTES
+            list_trans = []  # dictionnaire des transfo categorielles EXISTANTES
             for k, v in d_t.items():
-                if k!='numeric':
-                    list_trans.append((k,d_enc[self.dict_enc_strat[k]], v))
-                    
-            self.cat_cols = [] # liste des colonnes catégorielles à transformer
-            for k,v in self.d_type_col(X).items():
-                if k!='numeric': self.cat_cols += (list(v))
-                
+                if k != 'numeric':
+                    list_trans.append((k, d_enc[self.dict_enc_strat[k]], v))
+
+            self.cat_cols = []  # liste des colonnes catégorielles à transformer
+            for k, v in self.d_type_col(X).items():
+                if k != 'numeric': self.cat_cols += (list(v))
+
             self.ct_cat = ColumnTransformer(list_trans)
             self.cat_trans = Pipeline([("categ", self.ct_cat)])
-            
+
         if self.has_num:
             self.num_trans = Pipeline([("numeric", d_enc[self.strat_quant])])
             self.num_cols = d_t['numeric']
@@ -219,18 +222,18 @@ class CustTransformer(BaseEstimator) :
     #         self.fit(X, y)
     #         return self.column_trans.transform(X)
 
-    def transform(self, X, y=None): # to get a dataframe
+    def transform(self, X, y=None):  # to get a dataframe
         return pd.DataFrame(self.column_trans.transform(X),
                             index=X.index,
                             columns=self.get_feature_names(X, y))
 
     def fit_transform(self, X, y=None):
-        if y is None:  
+        if y is None:
             self.fit(X)
             return pd.DataFrame(self.column_trans.transform(X),
                                 index=X.index,
                                 columns=self.get_feature_names(X, y))
-        else: 
+        else:
             self.fit(X, y)
             return pd.DataFrame(self.column_trans.transform(X, y),
                                 index=X.index,
@@ -244,7 +247,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def plot_histograms(df, cols, file_name=None, bins=30, figsize=(12,7), color = 'grey',
-                    skip_outliers=True, thresh=3, layout=(3,3), save_enabled=False):
+                    skip_outliers=False, thresh=3, layout=(3,3), save_enabled=False):
 
     fig = plt.figure(figsize=figsize)
 
@@ -301,13 +304,15 @@ import seaborn as sns
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def plot_heatmap(corr, title, figsize=(8,4), vmin=-1, vmax=1, center=0,
-                 palette = sns.color_palette("coolwarm", 20), shape='rect',
-                 fmt='.2f', robust=False):
-    
-    fig, ax = plt.subplots(figsize=figsize)
+
+def plot_heatmap(corr, title, figsize=(8, 4), vmin=-1, vmax=1, center=0,
+                 palette=sns.color_palette("coolwarm", 20), shape='rect',
+                 fmt='.2f', robust=False, fig=None, ax=None):
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    ax = fig.add_subplot(111) if ax is None else ax
+
     if shape == 'rect':
-        mask=None
+        mask = None
     elif shape == 'tri':
         mask = np.zeros_like(corr, dtype=np.bool)
         mask[np.triu_indices_from(mask)] = True
@@ -316,14 +321,15 @@ def plot_heatmap(corr, title, figsize=(8,4), vmin=-1, vmax=1, center=0,
 
     palette = palette
     ax = sns.heatmap(corr, mask=mask, cmap=palette, vmin=vmin, vmax=vmax,
-                     center=center, annot=True, annot_kws={"size": 10},fmt=fmt,
-                     square=False, linewidths=.5, linecolor = 'white',
-                     cbar_kws={"shrink": .9, 'label': None}, robust = robust,
-                     xticklabels= corr.columns, yticklabels = corr.index)
-    ax.tick_params(labelsize=10,top=False, bottom=True,
-                labeltop=False, labelbottom=True)
+                     center=center, annot=True, annot_kws={"size": 10}, fmt=fmt,
+                     square=False, linewidths=.5, linecolor='white',
+                     cbar_kws={"shrink": .9, 'label': None}, robust=robust,
+                     xticklabels=corr.columns, yticklabels=corr.index,
+                     ax=ax)
+    ax.tick_params(labelsize=10, top=False, bottom=True,
+                   labeltop=False, labelbottom=True)
     ax.collections[0].colorbar.ax.tick_params(labelsize=10)
-    plt.setp(ax.get_xticklabels(), rotation=25, ha="right",rotation_mode="anchor")
+    plt.setp(ax.get_xticklabels(), rotation=25, ha="right", rotation_mode="anchor")
     ax.set_title(title, fontweight='bold', fontsize=12)
 
 
@@ -705,7 +711,7 @@ def plot_clust_scores_vs_n_clust(df, n_clust=range(2,8),
     return score_df_agg
 
 
-''' Plots on the left the silhouette scores of the clusters and
+''' Plots on the left the silhouette scores of each cluster and
 on the right the projection of the points with cluster labels as cluster'''
 
 from sklearn.metrics import silhouette_score, silhouette_samples
@@ -765,8 +771,7 @@ def silh_scores_vs_n_clust(df, n_clust, axis_2D, title='',
         # --- Plot 1: Showing clusters on chosen projection
         ax2 = fig.add_subplot(122)
 
-        colors = None if ser_clust is None else \
-            [sns.color_palette()[x] for x in ser_clust.astype('int')]
+        colors = None if ser_clust is None else [colors_2[x] for x in ser_clust.astype('int')]
 
         ax2.scatter(axis_2D.iloc[:, 0], axis_2D.iloc[:, 1],
                     s=1, alpha=0.7, c=colors)
@@ -816,24 +821,14 @@ sampling of the training set'''
 
 from sklearn.metrics import adjusted_rand_score
 
-def stability(model, df, n_iter=5, mode='init', n_samp=10000):
+def stability(model, df, n_iter=5, n_samp=10000):
 
-    if mode == 'init':
-        multiple_ser_clust = []
-        for i in range(n_iter):
-            model.fit(df)
-            multiple_ser_clust.append(model.labels_)
-        print("--- Testing for initialisation stability \
+    multiple_ser_clust = []
+    for i in range(n_iter):
+        model.fit(df)
+        multiple_ser_clust.append(model.labels_)
+    print("--- Testing for initialisation stability \
 ({} iterations) ---".format(n_iter))
-    elif mode == 'samp':
-        multiple_ser_clust = []
-        for i in range(n_iter):
-            df_samp = df.sample(n_samp)
-            model.fit(df)
-            multiple_ser_clust.append(model.labels_)
-        print("--- Testing for stability with {} lines random samples \
-(training set) ({} iterations) ---".format(n_samp, n_iter))
-
 
     # Computes ARI scores for each pair of models
     ARI_scores = []
@@ -848,3 +843,103 @@ def stability(model, df, n_iter=5, mode='init', n_samp=10000):
         mean:{:.1f} , std: {:.1f} ".format(ARI_mean, ARI_std))
 
     return ARI_scores
+
+'''Runs the given model on the given (scaled) data for various nb of clusters
+    Display the proportion of customers in each cluster
+'''
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import cm
+from sklearn.cluster import KMeans
+
+def clusters_ratio(df, n_clust, figsize=(15, 3)):
+    fig = plt.figure(figsize=figsize)
+    for i, k in enumerate(n_clust, 1):
+        # Computing Kmeans with k clusters on scaled data
+        km = KMeans(n_clusters=k)
+        km.fit(df)
+        # Computes cluster number (keeping original indices)
+        ser_clust = pd.Series(km.labels_, index=df.index)
+
+        # Compute pct of clients in each cluster
+        pop_perc = 100 * ser_clust.value_counts() / df.shape[0]
+        pop_perc.sort_index(inplace=True)
+
+        ax = fig.add_subplot(str(1) + str(len(n_clust)) + str(i))
+        ax.pie(pop_perc, autopct='%1.0f%%', pctdistance=0.5)
+        ax.set_title(f'{str(k)} clusters')  # , pad=20
+    fig.suptitle('Clusters ratio', fontsize=16, fontweight='bold')
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import cm
+from sklearn.cluster import KMeans
+
+'''Computes the relative difference between the mean and the mean
+of each clusters for each features of the original dataframe 
+'''
+
+def mean_dev_clust(model, df, orig_df, palette='seismic', figsize=(20, 3)):
+    # Assign segment to each customer in original dataset
+    data_with_clust = orig_df.assign(cluster=model.labels_)
+    k = data_with_clust['cluster'].nunique()
+
+    # Compute average for each feature by cluster
+    kmeans_averages = data_with_clust.groupby(['cluster']).mean().round(2)
+    print('Mean val for each cluster: ')
+    display(kmeans_averages)
+    print("\n")
+
+    # Ratio of difference between mean and cluster means for each feature
+    rel_variation = 100 * (kmeans_averages - orig_df.mean()) \
+                    / (orig_df.mean() + 0.1)
+
+    # Plotting figure
+    fig = plt.figure(figsize=figsize)
+    ax1 = fig.add_subplot(111)
+    vlim = np.array([abs(rel_var.min().min()),
+                     abs(rel_var.max().max())]).max()
+    sns.heatmap(data=rel_variation,
+                # vmin=-vlim, vmax=vlim,
+                center=0, annot=True, fmt='.0f',
+                cmap=palette, ax=ax1)
+    ax1.set_title('Mean deviation to the mean (%)', pad=20)
+    ax1.set_ylabel(ylabel='cluster', labelpad=20)
+    return rel_variation
+
+
+
+''' Plotting ANOVA and Kruskall-Wallis H test and return if same dist. or not'''
+
+from scipy.stats import f_oneway, kruskal
+
+def test_distrib_clust(data_df, Q_col, C_col, print_opt=True):
+    gb = data_df.groupby(C_col)[Q_col]
+    cat = list(gb.groups.keys())
+    cat_series = [gr.dropna().values for n, gr in gb]
+
+    if print_opt: print(5 * 'ooo' + ('- {} vs. {} -'.format(Q_col, C_col)) + 5 * 'ooo')
+
+    # Analysis of Variance Test
+    stat1, p1 = f_oneway(*cat_series)
+    if print_opt:
+        print('---ANOVA---')
+        print('stat=%.3f, p=%.10f' % (stat1, p1))
+        print('Prob. same distr') if p1 > 0.05 else print('Prob. different distr')
+    # Kruskal-Wallis H Test
+    stat2, p2 = kruskal(*cat_series)
+    if print_opt:
+        print('---Kruskal-Wallis---')
+        print('stat={:.3f}, p={:.10f}'.format(stat2, p2))
+        print('Prob. same distr') if p2 > 0.05 else print('Prob. different distr')
+
+    return {'ANOVA': (round(p1, 4), str(p1 > 0.05)),
+            'Kruskal-Wallis': (round(p2, 4), str(p2 > 0.05))}
+
+# - > at least one of the groups has a significantly different mean from the others.
