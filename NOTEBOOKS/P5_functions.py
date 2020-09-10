@@ -587,45 +587,140 @@ def draw_umap(data, ser_clust=None, n_neighbors=15, min_dist=0.1, n_components=2
 
     plt.title(title, fontsize=12)
 
+"""Checks if model object has any attributes ending with an underscore"""
 
-''' Plots the observations on two axis with clusters coloring if available (ser_clust)
-tests for various transformations (quantile transformer)'''
+import inspect
 
-from sklearn.preprocessing import QuantileTransformer
+def is_fitted(model):
+    return 0 < len( [k for k,v in inspect.getmembers(model) if k.endswith('_') \
+                     and not k.startswith('__')] )
 
 
-def plot_projection(df_2D, ser_clust=None, quant_transf=False,
-                    title='', figsize=(5, 3), fig=None, ax=None):
-    fig = plt.figure(figsize=figsize) if fig is None else fig
-    colors = None if ser_clust is None else \
-        [sns.color_palette()[x] for x in ser_clust.astype('int')]
+'''Computes the projection of the observations of df on the two first axes of
+a transformation (PCA, UMAP or t-SNE)
+The center option (clustering model needed) allows to project the centers
+on the two axis for further display, and to return the fitted model
+NB: if the model wa already fitted, does not refit.'''
 
-    if quant_transf:
+from sklearn.decomposition import PCA
+from umap import UMAP
+from sklearn.manifold import TSNE
 
-        ax = fig.add_subplot(131)
-        ax.scatter(df_2D.iloc[:, 0], df_2D.iloc[:, 1],
-                   s=1, alpha=0.7, c=colors)
-        ax.set_title(title + ": no transf.")
+def prepare_2D_axes(df, proj=['PCA', 'UMAP', 't-SNE'],
+                    model=None, centers_on=False):
+    dict_proj = dict()
 
-        ax = fig.add_subplot(132)
-        qt = QuantileTransformer(output_distribution='normal')
-        df_2D_qtn = qt.fit_transform(df_2D)
-        ax.scatter(df_2D_qtn[:, 0], df_2D_qtn[:, 1],
-                   s=1, alpha=0.7, c=colors)
-        ax.set_title(title + ": quantile trans. (normal)")
+    if centers_on:  # Compute and include the centers in the points
+        model = model.fit(df) if not is_fitted(model) else model
+        centers = model.cluster_centers_
+        ind_centers = ["clust_" + str(i) for i in range(centers.shape[0])]
+        centers_df = pd.DataFrame(centers,
+                                  index=ind_centers,
+                                  columns=df.columns)
+        df = df.append(centers_df)
 
-        ax = fig.add_subplot(133)
-        qt = QuantileTransformer(output_distribution='uniform')
-        df_2D_qtu = qt.fit_transform(df_2D)
-        ax.scatter(df_2D_qtu[:, 0], df_2D_qtu[:, 1],
-                   s=1, alpha=0.7, c=colors)
-        ax.set_title(title + ": quantile trans. (uniform)")
+    ## Projection of all the points through the transformations
 
+    # PCA
+    if 'PCA' in proj:
+        pca = PCA(n_components=2)
+        df_proj_PCA_2D = pd.DataFrame(pca.fit_transform(df),
+                                      index=df.index,
+                                      columns=['PC' + str(i) for i in range(2)])
+        dict_proj = dict({'PCA': df_proj_PCA_2D})
+
+    # UMAP
+    if 'UMAP' in proj:
+        umap = UMAP(n_components=2, random_state=14)
+        df_proj_UMAP_2D = pd.DataFrame(umap.fit_transform(df),
+                                       index=df.index,
+                                       columns=['UMAP' + str(i) for i in range(2)])
+        dict_proj = dict({'UMAP': df_proj_UMAP_2D})
+
+    # t-SNE
+    if 't-SNE' in proj:
+        tsne = TSNE(n_components=2, random_state=14)
+        df_proj_tSNE_2D = pd.DataFrame(tsne.fit_transform(df),
+                                       index=df.index,
+                                       columns=['t-SNE' + str(i) for i in range(2)])
+        dict_proj = dict({'t-SNE': df_proj_tSNE_2D})
+
+    # Separate the clusters centers from the other points if center option in on
+    if centers_on:
+        dict_proj_centers = {}
+        for name, df_proj in dict_proj.items():
+            dict_proj_centers[name] = dict_proj[name].loc[ind_centers]
+            dict_proj[name] = dict_proj[name].drop(index=ind_centers)
+        return dict_proj, dict_proj_centers, model
     else:
-        ax = fig.add_subplot(111) if ax is None else ax
-        ax.scatter(df_2D.iloc[:, 0], df_2D.iloc[:, 1],
-                   s=1, alpha=0.7, c=colors)
-        ax.set_title(title + ": no transf.")
+        return dict_proj
+
+''' Plots the points on two axis (projection choice available : PCA, UMAP, t-SNE)
+with clusters coloring if model available (grey if no model given).
+NB: if the model wa already fitted, does not refit.'''
+
+
+def plot_projection(df, model=None, proj='PCA', title=None,
+                    figsize=(5, 3), palette='tab10', fig=None, ax=None):
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    ax = fig.add_subplot(111) if ax is None else ax
+
+    # if model : computes clusters, clusters centers and plot with colors
+    if not model is None:
+
+        # Computes the axes for projection with centers
+        # (uses fitted model if already fitted)
+        dict_proj, dict_proj_centers, model = prepare_2D_axes(df,
+                                                              proj=[proj],
+                                                              model=model,
+                                                              centers_on=True)
+        # ...using model already fitted in prepare_2D_axes
+        ser_clust = pd.Series(model.predict(df),
+                              index=df.index,
+                              name='Clust')
+
+        n_clust = ser_clust.nunique()
+        colors = sns.color_palette(palette, n_clust).as_hex()
+
+        # Showing the points, cluster by cluster
+        for i in range(n_clust):
+            ind = ser_clust[ser_clust == i].index
+            ax.scatter(dict_proj[proj].loc[ind].iloc[:, 0],
+                       dict_proj[proj].loc[ind].iloc[:, 1],
+                       s=1, alpha=0.7, c=colors[i])
+
+            # Showing the clusters centers
+            ax.scatter(dict_proj_centers[proj].iloc[:, 0].values[i],
+                       dict_proj_centers[proj].iloc[:, 1].values[i],
+                       marker='o', c=colors[i], alpha=1, s=150, edgecolor='k')
+            # Showing the clusters centers labels
+            ax.scatter(dict_proj_centers[proj].iloc[:, 0].values[i],
+                       dict_proj_centers[proj].iloc[:, 1].values[i],
+                       marker=r"$ {} $".format(str(i)),
+                       c='k', alpha=1, s=70, )
+
+        # # Showing the clusters centers
+        # ax.scatter(dict_proj_centers[proj].iloc[:, 0],
+        #            dict_proj_centers[proj].iloc[:, 1],
+        #         #    marker='o',
+        #            marker=r"$ {} $".format(str(i)),
+        #            c=colors, alpha=1, s=100, edgecolor='k')
+
+
+    # if no model, only plot points in grey
+    else:
+        # Computes the axes for projection without centers
+        dict_proj = prepare_2D_axes(df,
+                                    proj=[proj],
+                                    centers_on=False)
+        # Plotting the point in grey
+        ax.scatter(dict_proj[proj].iloc[:, 0],
+                   dict_proj[proj].iloc[:, 1],
+                   s=1, alpha=0.7, c='grey')
+
+    title = "Projection: " + proj if title is None else title
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
 
 ''' Computes Silhouette, Davies-Bouldin, Calinsky-Harabasz and inertia scores
 for different number of clusters, then aggregate (mean std)
@@ -633,7 +728,6 @@ and plot the mean scores as a function of the number of clusters,
 returns the aggregated scores as a dataframe'''
 
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
-
 
 def plot_clust_scores_vs_n_clust(df, n_clust=range(2,8),
                                  n_iter=10, figsize=(15,3)):
@@ -716,10 +810,10 @@ on the right the projection of the points with cluster labels as cluster'''
 
 from sklearn.metrics import silhouette_score, silhouette_samples
 
-def silh_scores_vs_n_clust(df, n_clust, axis_2D, title='',
-                           xlim=(-0.1, 0.8), figsize=(18, 3)):
-    palette = sns.color_palette("husl", max(n_clust))
-    colors_2 = palette.as_hex()
+def silh_scores_vs_n_clust(df, n_clust, proj='PCA',
+                           xlim=(-0.1, 0.8), figsize=(18, 3), palette='tab10'):
+    palette = sns.color_palette(palette, max(n_clust))
+    colors = palette.as_hex()
 
     distor = []
     for n in n_clust:
@@ -728,36 +822,40 @@ def silh_scores_vs_n_clust(df, n_clust, axis_2D, title='',
         # --- Plot 1: Silhouette scores
         ax1 = fig.add_subplot(121)
 
-        km = KMeans(n_clusters=n, random_state=14)
-        ser_clust = km.fit_predict(df)
-        distor.append(km.inertia_)
+        model = KMeans(n_clusters=n, random_state=14)
+        model = model.fit(df)
 
+        ser_clust = pd.Series(model.predict(df),
+                              index=df.index,
+                              name='Clust')
+        distor.append(km.inertia_)
         sample_silh_val = silhouette_samples(df, ser_clust)
 
         y_lower = 10
+        # colors = [colors[x] for x in ser_clust.astype('int')]
         for i in range(n):
             # Aggregate and sort silh scores for samples of clust i
-            ith_clust_silh_val = sample_silh_val[ser_clust == i]
-            ith_clust_silh_val.sort()
-            size_cluster_i = ith_clust_silh_val.shape[0]
-            y_upper = y_lower + size_cluster_i
+            clust_silh_val = sample_silh_val[ser_clust == i]
+            clust_silh_val.sort()
+            size_clust = clust_silh_val.shape[0]
+            y_upper = y_lower + size_clust
             ax1.fill_betweenx(np.arange(y_lower, y_upper),
                               0,
-                              ith_clust_silh_val,
-                              facecolor=colors_2[i],
-                              edgecolor=colors_2[i],
+                              clust_silh_val,
+                              facecolor=colors[i],
+                              edgecolor=colors[i],
                               alpha=0.7)
 
             # Label of silhouette plots with their clust. nb. at the middle
-            ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+            ax1.text(-0.05, y_lower + 0.5 * size_clust, str(i))
 
             # Computes the new y_lower for next plot
             y_lower = y_upper + 10  # 10 for the 0 samples
 
         silhouette_avg = silhouette_score(df, ser_clust)
-        ax1.set_title("Nb of clusters={}, avg silhouhette score: {:.3f}" \
+        ax1.set_title("Nb of clusters: {} | Avg silhouette: {:.3f}" \
                       .format(n, silhouette_avg), fontsize=12)
-        ax1.set_xlabel("The silhouette coefficient values")
+        ax1.set_xlabel("Silhouette coeff. values")
         ax1.set_ylabel("Cluster label")
 
         # The vertical line for average silhouette score of all the values
@@ -768,24 +866,16 @@ def silh_scores_vs_n_clust(df, n_clust, axis_2D, title='',
         # (n+1)*10: inserting blank spaces between clusters silh scores
         ax1.set_ylim([0, df.shape[0] + (n + 1) * 10])
 
-        # --- Plot 1: Showing clusters on chosen projection
+        # --- Plot 2: Showing clusters on chosen projection
         ax2 = fig.add_subplot(122)
+        # uses already fitted model
+        plot_projection(df, model=model,
+                        proj=proj,
+                        palette=palette,
+                        fig=fig, ax=ax2)
 
-        colors = None if ser_clust is None else [colors_2[x] for x in ser_clust.astype('int')]
+        ax2.set_title('projection: ' + proj, fontsize=12)
 
-        ax2.scatter(axis_2D.iloc[:, 0], axis_2D.iloc[:, 1],
-                    s=1, alpha=0.7, c=colors)
-        ax2.set_title(title, fontsize=12)
-
-        ### A REPARER --- TRACAGE DES CENTROIDES SUR LES GRAPHES A INCLURE dans la fonction plot_projection
-        # # Showing centers of the clusters
-        # for i in n_clust:
-        #     centers = km.cluster_centers_
-        #     ax2.scatter(centers[:, 0], centers[:, 1], centers[:, 2],
-        #                 marker='o', c="white", alpha=1, s=200, edgecolor='k')
-        #     for i, c in enumerate(centers):
-        #         ax2.scatter(c[0], c[1], c[2], marker='$%d$' % i,
-        #                     alpha=1, s=50, edgecolor='k')
         plt.suptitle("Silhouette analysis for {} clusters".format(n),
                      fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
