@@ -742,6 +742,9 @@ respectively:
 - and the pies of the clusters ratio,
  based on the dictionnaries provided by compute_clust_scores_nclust"""
 
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+
 def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
                                  n_iter=10, return_pop=False):
 
@@ -844,7 +847,7 @@ for each iteration (rows) of the model in one figure with error bars (2 sigmas)'
 def plot_prop_clust_vs_nclust(dict_pop_perc_n_clust, figsize=(15,3)):
 
     fig = plt.figure(figsize=figsize)
-    list_n_clust = list(dict_scores_iter.keys())
+    list_n_clust = list(dict_pop_perc_n_clust.keys())
 
     for i, n_clust in enumerate(list_n_clust, 1):
         ax = fig.add_subplot(3,3,i)
@@ -983,38 +986,53 @@ def combinlist(seq, k):
     return p
 
 
-'''Computes n_iter times the clusters (various random initialisation) then
-returns the mean and std of ARI between each unique couple of results
-2 modes:
-- 'init': initialisation stability: checks for stability of clusters for various
-random initialisation of the clustering model
-- 'samp': sampling stability: checks for stability of the clusters for differents
-sampling of the training set'''
+'''Takes a dataframe of clusters number (prediction) for a set of observation, 
+and computes the ARI score between pairs of columns.
+Two modes are available:
+- first_vs_others=False: to check the initialisation stability.
+The columns are obtains for n_columns iterations of the same model
+with different initialisation
+- first_vs_others=True: to compare the predictions obtained with the whole
+dataset (first column) and predictions obtained with a sample
+(the other columns)
+Return a pd.Series of the ARI scores (values) for each pair of columns (index).
+'''
 
 from sklearn.metrics import adjusted_rand_score
 
-def stability(model, df, n_iter=5, n_samp=10000):
+def ARI_column_pairs(df_mult_ser_clust, first_vs_others=False, print_opt=True):
 
-    multiple_ser_clust = []
-    for i in range(n_iter):
-        model.fit(df)
-        multiple_ser_clust.append(model.labels_)
-    print("--- Testing for initialisation stability \
-({} iterations) ---".format(n_iter))
-
+    n_columns = len(df_mult_ser_clust.columns)
+    n_clust = df_mult_ser_clust.stack().nunique()
+    
     # Computes ARI scores for each pair of models
     ARI_scores = []
-    pairs_list = combinlist(np.arange(n_iter),2)
+    if first_vs_others: # first columns versus the others
+        pairs_list = [[df_mult_ser_clust.columns[0],
+                       df_mult_ser_clust.columns[i]] \
+                      for i in range(1, n_columns)]
+        if print_opt: print("--- ARI between first and the {} others ---"\
+                            .format(n_columns-1))
+        name = f'ARI_{str(n_clust)}_clust_first_vs_others'
+    else: # all pairs
+        pairs_list = combinlist(df_mult_ser_clust.columns,2)
+        if print_opt: print("--- ARI all {} unique pairs ---"\
+                            .format(len(pairs_list)))
+        name = f'ARI_{str(n_clust)}_clust_all_pairs'
+
     for i, j in pairs_list:
-        ARI_scores.append(adjusted_rand_score(multiple_ser_clust[i],
-                                              multiple_ser_clust[j]))
+        ARI_scores.append(adjusted_rand_score(df_mult_ser_clust.loc[:,i],
+                                              df_mult_ser_clust.loc[:,j]))
 
     # Compute the mean and standard deviation of ARI scores
     ARI_mean, ARI_std = np.mean(ARI_scores), np.std(ARI_scores)
-    print("Evaluation of stability with random init :\n\
-        mean:{:.1f} , std: {:.1f} ".format(ARI_mean, ARI_std))
+    ARI_min, ARI_max = np.min(ARI_scores), np.max(ARI_scores)
+    if print_opt: print("Evaluation of stability with random init :\n\
+            ARI: mean={:.3f}, std={:.3f}, min={:.3f}, max={:.3f} "\
+            .format(ARI_mean, ARI_std, ARI_min, ARI_max))
 
-    return ARI_scores
+    return pd.Series(ARI_scores, index=pd.Index(pairs_list),
+                     name=name)
 
 
 ''' For each quantitative value of the original dataframe
