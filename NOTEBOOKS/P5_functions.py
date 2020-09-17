@@ -848,8 +848,10 @@ def plot_prop_clust_vs_nclust(dict_pop_perc_n_clust, figsize=(15,3)):
 
     fig = plt.figure(figsize=figsize)
     list_n_clust = list(dict_pop_perc_n_clust.keys())
+    
 
     for i, n_clust in enumerate(list_n_clust, 1):
+        n_iter = dict_pop_perc_n_clust[n_clust].shape[0]
         ax = fig.add_subplot(3,3,i)
         sns.stripplot(data=dict_pop_perc_n_clust[n_clust],
                       edgecolor='k', linewidth=1,  ax=ax)
@@ -1027,8 +1029,7 @@ def ARI_column_pairs(df_mult_ser_clust, first_vs_others=False, print_opt=True):
     # Compute the mean and standard deviation of ARI scores
     ARI_mean, ARI_std = np.mean(ARI_scores), np.std(ARI_scores)
     ARI_min, ARI_max = np.min(ARI_scores), np.max(ARI_scores)
-    if print_opt: print("Evaluation of stability with random init :\n\
-            ARI: mean={:.3f}, std={:.3f}, min={:.3f}, max={:.3f} "\
+    if print_opt: print("ARI: mean={:.3f}, std={:.3f}, min={:.3f}, max={:.3f} "\
             .format(ARI_mean, ARI_std, ARI_min, ARI_max))
 
     return pd.Series(ARI_scores, index=pd.Index(pairs_list),
@@ -1110,6 +1111,21 @@ def test_distrib_clust(data_df, Q_col, C_col, print_opt=True):
             'Kruskal-Wallis': (round(p2, 4), str(p2 > 0.05))}
 
 
+'''Summary of results of ANOVA and Kruskal Wallis test on each
+quantitative column of data_df against one categorical columns (C_col)
+''' 
+
+def summary_ANOVA_Kruskal(data_df, C_col, print_opt=True):
+
+    res_df=pd.DataFrame()
+    for c in data_df.select_dtypes(include=np.number).columns:
+        if print_opt: print('oooo--'+c+'--oooo')
+        dic_stat = test_distrib_clust(data_df, C_col=C_col,
+                                            Q_col=c, print_opt=print_opt)
+        for s in dic_stat.keys():
+            res_df.loc[s,c] = str(dic_stat.get(s))
+    return res_df
+
 ''' Computes the clusters from a model (does not refit if already fitted)
 and creates contingency tables of binarized quantitative data vs. clusters
 - df is the transformed dataset on which the clustering is or will be fitted
@@ -1171,3 +1187,50 @@ def contingency_tables(model, df, df_expl, min_max=(0,2000),
 
     plt.tight_layout()
     plt.show()
+
+    ''' Plots a radar chart of the cluster profiles from a dataframe containing:
+- the name or number of cluster as index
+- the means of each features per clusters in columns
+OR
+- the value of each features (transformed) for each cluster center (centroid)
+NB: the values would be the same if the was no transformation
+
+Values are scaled using a MinMaxScaler'''
+
+from sklearn.preprocessing import MinMaxScaler
+from math import pi
+
+def plot_radar_chart(df, row, title, color, min_max_scaling=False, ax=None):
+
+    df_copy = df.copy('deep')
+    if min_max_scaling:
+        min_max = MinMaxScaler()
+        df_copy = pd.DataFrame(min_max.fit_transform(df_copy),
+                               index=df_copy.index,
+                               columns=df_copy.columns)
+    df_ = df_copy.reset_index()
+    categories=list(df)
+    n_vars = len(categories)
+    
+    angles = [n / float(n_vars) * 2 * pi for n in range(n_vars)]
+    angles += angles[:1] # "complete the loop"
+    
+    ax = plt.subplot(1,1,1, polar=True) if ax is None else ax
+    
+    # First axis to be on top:
+    ax.set_theta_offset(pi / 2)
+    ax.set_theta_direction(-1)
+    
+    plt.xticks(angles[:-1], categories, color='grey', size=8)
+    
+    ax.set_rlabel_position(0)
+    plt.yticks(color="grey", size=7)# [10,20,30], ["10","20","30"], 
+    # plt.ylim(0,40)
+    
+    values=df_.loc[row].drop('clust').values.flatten().tolist() # 
+    values += values[:1]
+    ax.plot(angles, values, color=color, linewidth=2, linestyle='solid')
+    ax.fill(angles, values, color=color, alpha=0.4)
+    
+    plt.title(title, size=11, color=color, y=1.1,
+              fontweight='bold')
