@@ -1,3 +1,24 @@
+"""Decorator to time functions
+Call using following model when creating the function to be timed:
+    @timing
+    def function(a):
+        pass
+"""
+
+import time
+from functools import wraps
+
+def timing(f):
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = f(*args, **kwargs)
+        end = time.time()
+        print('function:%r took: %2.2f sec' % (f.__name__,  end - start))
+        return result
+    return wrapper
+
 # Printing total nb and percentage of null
 
 import pandas as pd
@@ -166,7 +187,7 @@ class CustTransformer(BaseEstimator):
                  'norm': Normalizer(),
                  'quant_uni': QuantileTransformer(output_distribution='uniform'),
                  'quant_norm': QuantileTransformer(output_distribution='normal'),
-                 'boxcox': PowerTransformer(method='boxcox'),
+                 'boxcox': PowerTransformer(method='box-cox'),
                  'yeo': PowerTransformer(method='yeo-johnson'),
                  'log': FunctionTransformer(func=lambda x: np.log1p(x),
                                             inverse_func=lambda x: np.expm1(x)),
@@ -607,24 +628,32 @@ from umap import UMAP
 from sklearn.manifold import TSNE
 
 def prepare_2D_axes(df, proj=['PCA', 'UMAP', 't-SNE'],
-                    model=None, centers_on=False):
+                    model=None, centers_on=False, random_state=14):
 
     dict_proj = dict()
 
     if centers_on:  # Compute and include the centers in the points
         model = model.fit(df) if not is_fitted(model) else model
-        centers = model.cluster_centers_
-        ind_centers = ["clust_" + str(i) for i in range(centers.shape[0])]
-        centers_df = pd.DataFrame(centers,
-                                  index=ind_centers,
-                                  columns=df.columns)
+        #### all clusterers don't have .cluster_centers method -> changed
+        # centers = model.cluster_centers_ 
+        # ind_centers = ["clust_" + str(i) for i in range(centers.shape[0])]
+        # centers_df = pd.DataFrame(centers,
+        #                           index=ind_centers,
+        #                           columns=df.columns)
+        #### all clusterers don't have .predict/labels_ method -> changed
+        if hasattr(model, 'labels_'):
+            clust = model.labels_
+        else:
+            clust = model.predict(df)
+        centers_df = df.assign(clust=clust).groupby('clust').mean()
+
         df = df.append(centers_df)
 
     ## Projection of all the points through the transformations
 
     # PCA
     if 'PCA' in proj:
-        pca = PCA(n_components=2)
+        pca = PCA(n_components=2, random_state=random_state)
         df_proj_PCA_2D = pd.DataFrame(pca.fit_transform(df),
                                       index=df.index,
                                       columns=['PC' + str(i) for i in range(2)])
@@ -632,7 +661,7 @@ def prepare_2D_axes(df, proj=['PCA', 'UMAP', 't-SNE'],
 
     # UMAP
     if 'UMAP' in proj:
-        umap = UMAP(n_components=2, random_state=14)
+        umap = UMAP(n_components=2, random_state=random_state)
         df_proj_UMAP_2D = pd.DataFrame(umap.fit_transform(df),
                                        index=df.index,
                                        columns=['UMAP' + str(i) for i in range(2)])
@@ -640,7 +669,7 @@ def prepare_2D_axes(df, proj=['PCA', 'UMAP', 't-SNE'],
 
     # t-SNE
     if 't-SNE' in proj:
-        tsne = TSNE(n_components=2, random_state=14)
+        tsne = TSNE(n_components=2, random_state=random_state)
         df_proj_tSNE_2D = pd.DataFrame(tsne.fit_transform(df),
                                        index=df.index,
                                        columns=['t-SNE' + str(i) for i in range(2)])
@@ -650,11 +679,12 @@ def prepare_2D_axes(df, proj=['PCA', 'UMAP', 't-SNE'],
     if centers_on:
         dict_proj_centers = {}
         for name, df_proj in dict_proj.items():
-            dict_proj_centers[name] = dict_proj[name].loc[ind_centers]
-            dict_proj[name] = dict_proj[name].drop(index=ind_centers)
+            dict_proj_centers[name] = dict_proj[name].loc[centers_df.index]
+            dict_proj[name] = dict_proj[name].drop(index=centers_df.index)
         return dict_proj, dict_proj_centers, model
     else:
         return dict_proj
+
 
 ''' Plots the points on two axis (projection choice available : PCA, UMAP, t-SNE)
 with clusters coloring if model available (grey if no model given).
@@ -662,7 +692,8 @@ NB: if the model wa already fitted, does not refit.'''
 
 
 def plot_projection(df, model=None, proj='PCA', title=None,
-                    figsize=(5, 3), palette='tab10', fig=None, ax=None):
+                    figsize=(5, 3), palette='tab10', fig=None, ax=None, random_state=14):
+
     fig = plt.figure(figsize=figsize) if fig is None else fig
     ax = fig.add_subplot(111) if ax is None else ax
 
@@ -674,9 +705,15 @@ def plot_projection(df, model=None, proj='PCA', title=None,
         dict_proj, dict_proj_centers, model = prepare_2D_axes(df,
                                                               proj=[proj],
                                                               model=model,
-                                                              centers_on=True)
+                                                              centers_on=True,
+                                                              random_state=random_state)
         # ...using model already fitted in prepare_2D_axes
-        ser_clust = pd.Series(model.predict(df),
+        #### all clusterers don't have .predict/labels_ method -> changed
+        if hasattr(model, 'labels_'):
+            clust = model.labels_
+        else:
+            clust = model.predict(df)
+        ser_clust = pd.Series(clust,
                               index=df.index,
                               name='Clust')
 
@@ -693,27 +730,20 @@ def plot_projection(df, model=None, proj='PCA', title=None,
             # Showing the clusters centers
             ax.scatter(dict_proj_centers[proj].iloc[:, 0].values[i],
                        dict_proj_centers[proj].iloc[:, 1].values[i],
-                       marker='o', c=colors[i], alpha=1, s=150, edgecolor='k')
+                       marker='o', c=colors[i], alpha=0.4, s=150, edgecolor='k')
             # Showing the clusters centers labels
             ax.scatter(dict_proj_centers[proj].iloc[:, 0].values[i],
                        dict_proj_centers[proj].iloc[:, 1].values[i],
                        marker=r"$ {} $".format(str(i)),
                        c='k', alpha=1, s=70, )
 
-        # # Showing the clusters centers
-        # ax.scatter(dict_proj_centers[proj].iloc[:, 0],
-        #            dict_proj_centers[proj].iloc[:, 1],
-        #         #    marker='o',
-        #            marker=r"$ {} $".format(str(i)),
-        #            c=colors, alpha=1, s=100, edgecolor='k')
-
-
     # if no model, only plot points in grey
     else:
         # Computes the axes for projection without centers
         dict_proj = prepare_2D_axes(df,
                                     proj=[proj],
-                                    centers_on=False)
+                                    centers_on=False,
+                                    random_state=random_state)
         # Plotting the point in grey
         ax.scatter(dict_proj[proj].iloc[:, 0],
                    dict_proj[proj].iloc[:, 1],
@@ -722,6 +752,67 @@ def plot_projection(df, model=None, proj='PCA', title=None,
     title = "Projection: " + proj if title is None else title
     ax.set_title(title, fontsize=12)
     ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
+
+"""Takes a clustering model (model), fits one time on the whole dataset (df)
+('whole model'), and computes the labels for each row then for each
+number of rows in a list (li_n_samp), refits the model and
+computes the labels (.predict) for the whole dataset
+Returns a dataframe (df_ARI_all_vs_sample_iter) containing all
+the ARI scores obtained between the predictions made by the "whole model"
+and that of each 'sample model' (columns of the dataframe)
+NB: the same sequence is repeated a certain (n_iter) number of times
+(rows of the dataframe)"""
+
+from sklearn.metrics import adjusted_rand_score
+from sklearn.model_selection import train_test_split
+
+def check_ARI_through_sampling(model, df, li_n_samp,
+                                  n_iter=10, stratify=None):
+
+    df_ARI_all_vs_sample_iter = pd.DataFrame()
+
+    # Fit the model if not already done, compute clusters
+    model = model.fit(df)
+    ser_clust_all = pd.Series(model.labels_,
+                          index=df.index,
+                          name='all')
+
+    # Looping over a number of iterations
+
+    for i in range(n_iter):
+
+        print(f"ooo ITERATION {i} ooo")
+
+        # Looping over a list of sample indexes (with random_state changes)
+        list_samp_df = []
+        for n in li_n_samp:
+            df_sampl, _ = \
+                train_test_split(df, train_size=n, stratify=stratify)
+            list_samp_df.append(df_sampl)
+
+        # Clustering labels obtained by fitting with samples
+        # NB: the first column is the prediction of the "whole model"
+        df_ARI_sampl = pd.DataFrame(ser_clust_all.to_frame())
+        for df_samp in list_samp_df:
+            n_samp = df_samp.shape[0]
+            # print("ooooooooo Number of samples: ", n_samp)
+            model.fit(df_samp)
+            ser_clust = pd.Series(model.predict(df),
+                                  index=df.index,
+                                  name=str(n_samp)+'_sampl').to_frame()
+            df_ARI_sampl = pd.concat([df_ARI_sampl, ser_clust], axis=1)
+
+        # Computing the ARI score (whole dataset) between predictions with 
+        # the "all" model vs predictions with "sample" model
+        stab_sampl_kmeans = ARI_column_pairs(df_ARI_sampl, first_vs_others=True,
+                                            print_opt=False)
+        df_ARI_all_vs_sample_iter = pd.concat([df_ARI_all_vs_sample_iter,
+                                               stab_sampl_kmeans.to_frame()],
+                                              axis=1)
+    df_ARI_all_vs_sample_iter.columns = \
+            ['iter_'+str(i) for i in range(n_iter)]
+    return df_ARI_all_vs_sample_iter
+
 
 """ For a each number of clusters in a list ('list_n_clust'),
 - runs iterations ('n_iter' times) of a KMeans on a given dataframe,
@@ -1107,8 +1198,9 @@ def test_distrib_clust(data_df, Q_col, C_col, print_opt=True):
         print('stat={:.3f}, p={:.10f}'.format(stat2, p2))
         print('Prob. same distr') if p2 > 0.05 else print('Prob. different distr')
 
-    return {'ANOVA': (round(p1, 4), str(p1 > 0.05)),
-            'Kruskal-Wallis': (round(p2, 4), str(p2 > 0.05))}
+    return pd.Series({'ANOVA': (p1, str(p1 > 0.05)), # round(p1, 4)
+            'Kruskal-Wallis': (p2, str(p2 > 0.05))},
+            name=Q_col) # round(p2, 4)
 
 
 '''Summary of results of ANOVA and Kruskal Wallis test on each
@@ -1133,7 +1225,8 @@ and creates contingency tables of binarized quantitative data vs. clusters
 
 from scipy.stats import chi2_contingency
 
-def contingency_tables(model, df, df_expl, min_max=(0,2000),
+
+def contingency_tables(model, df, df_expl, min_max=None,
                        cut_mode='uniform', # 'uniform' or 'quantile'
                        palette="seismic"):
 
@@ -1169,7 +1262,11 @@ def contingency_tables(model, df, df_expl, min_max=(0,2000),
 
         # Plot a grid of tables of contingency
         ax = fig.add_subplot(n_rows, 2, i)
-        vmin, vmax = min_max
+        if min_max == None:
+            vmin = data_crosstab.min().min()
+            vmax = data_crosstab.max().max()
+        else:
+            vmin, vmax = min_max
         center = (vmin + vmax) / 2
         plot_heatmap(data_crosstab, vmin=vmin, center=center, vmax=vmax,
                      title=col, palette=sns.color_palette(palette, 20),
@@ -1187,6 +1284,7 @@ def contingency_tables(model, df, df_expl, min_max=(0,2000),
 
     plt.tight_layout()
     plt.show()
+
 
     ''' Plots a radar chart of the cluster profiles from a dataframe containing:
 - the name or number of cluster as index
@@ -1234,3 +1332,33 @@ def plot_radar_chart(df, row, title, color, min_max_scaling=False, ax=None):
     
     plt.title(title, size=11, color=color, y=1.1,
               fontweight='bold')
+
+
+''' Class that join a clustering algorithm to a classification algorithm
+to be able to train the clustering algorithm on a sample and to predict
+clusters labels on new unlearned data '''
+
+from sklearn.base import BaseEstimator, clone
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils.metaestimators import if_delegate_has_method
+
+class InductiveClusterer(BaseEstimator):
+    def __init__(self, clusterer, classifier):
+        self.clusterer = clusterer
+        self.classifier = classifier
+
+    def fit(self, X, y=None):
+        self.clusterer_ = clone(self.clusterer)
+        self.classifier_ = clone(self.classifier)
+        y = self.clusterer_.fit_predict(X)
+        self.classifier_.fit(X, y)
+        return self
+
+    @if_delegate_has_method(delegate='classifier_')
+    def predict(self, X):
+        return self.classifier_.predict(X)
+
+    @if_delegate_has_method(delegate='classifier_')
+    def decision_function(self, X):
+        return self.classifier_.decision_function(X)
