@@ -767,7 +767,7 @@ from sklearn.metrics import adjusted_rand_score
 from sklearn.model_selection import train_test_split
 
 def check_ARI_through_sampling(model, df, li_n_samp,
-                                  n_iter=10, stratify=None):
+                                  n_iter=10, stratify=None, print_opt=True):
 
     df_ARI_all_vs_sample_iter = pd.DataFrame()
 
@@ -781,7 +781,7 @@ def check_ARI_through_sampling(model, df, li_n_samp,
 
     for i in range(n_iter):
 
-        print(f"ooo ITERATION {i} ooo")
+        if print_opt: print(f"ooo ITERATION {i} ooo")
 
         # Looping over a list of sample indexes (with random_state changes)
         list_samp_df = []
@@ -1167,7 +1167,8 @@ def mean_deviation_clust(model, df, orig_df, palette='seismic', figsize=(20, 3))
                 vmin=-vlim, vmax=vlim,
                 center=0, annot=True, fmt='.0f',
                 cmap=palette, ax=ax1)
-    ax1.set_title('Mean deviation to the mean (%)', pad=20)
+    ax1.set_title('Mean deviation to the mean (%)',
+        fontsize=14, fontweight='bold' ,pad=20)
     ax1.set_ylabel(ylabel='cluster', labelpad=20)
 
     return clust_mean, orig_df_mean, rel_var
@@ -1362,3 +1363,467 @@ class InductiveClusterer(BaseEstimator):
     @if_delegate_has_method(delegate='classifier_')
     def decision_function(self, X):
         return self.classifier_.decision_function(X)
+
+
+''' Plots boxplots of quantitative features for each cluster'''
+
+def plot_boxplots_feat_vs_clust(df, df_expl, model, col_order=None):
+
+    fig = plt.figure(figsize=(12,12))
+
+    model = model.fit(df) if not is_fitted(model) else model
+    ser_clust = pd.Series(model.labels_,
+                        index=df.index,
+                        name='clust')
+
+    with sns.color_palette('dark'):
+        col_order = df.columns if col_order is None else col_order
+        for i, c in enumerate(col_order,1):
+            ax = fig.add_subplot(4,4,i)
+            sns.boxplot(data=df_expl.assign(clust=ser_clust),
+                        x='clust', y=c, width=0.5, ax=ax)
+            plt.grid()
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.suptitle('Dispersion of quantitative data through clusters',
+                fontsize=16, fontweight='bold')
+    plt.show()
+
+''' Plots the Snake plot from a dataframe ('rel_var') of the relative
+deviation of the mean (pct) of the features (columns) for each cluster (index)
+NB: 'rel_var' can be obtained using the 'mean_deviation_clust' function
+('rel_var' output)
+The most important columns can be selected using 'thresh_dev'.
+'''
+
+from sklearn.preprocessing import StandardScaler
+
+def plot_snake(rel_var, thresh_dev=5):
+
+    sel_col = rel_var[rel_var>thresh_dev].dropna(how='all', axis=1).columns
+    sel_col = [col for col in sel_col if not 'cat_' in col]
+    n_clust = rel_var.shape[0]
+
+    ss = StandardScaler()
+    std_rel_var = pd.DataFrame(ss.fit_transform(rel_var.T).T,
+                               index = rel_var.index,
+                               columns=rel_var.columns)
+
+    fig, ax = plt.subplots(1)
+    std_rel_var[sel_col].plot(marker='o', ax=ax,
+                              color=sns.color_palette('tab10'))
+    ax.legend(ncol=1, bbox_to_anchor=[1,1])
+    plt.xticks(np.arange(n_clust))
+    ax.set_ylabel("standardized rel. mean dev.")
+    plt.title("Snake plot", fontweight='bold')
+    fig.set_size_inches(6,4)
+    plt.show()
+
+''' SANKEY DIAGRAM | Takes the dataframe of the clusters labels of the customers for 
+each period of time, then computes the flows between the clusters of each period
+returns a dataframe of the source label, target label and
+value of the flow (to be used with go.Sankey)
+'''
+def computing_flows_dataframe(df_clust_1st_year):
+
+    n_clust = df_clust_1st_year.nunique().max()
+    n_periods = df_clust_1st_year.shape[1]
+    # Renaming the columns with period number for easier handling
+    df_ = df_clust_1st_year
+    df_.columns = np.arange(len(df_.columns))
+
+    all_flows = pd.DataFrame()
+    for i in range(n_periods-1):
+        # Computing the flow for each clusters pair from i period to the next
+        flow = df_.groupby([i,i+1]).size()
+        flow = flow.rename(f'flow_{i}_{i+1}').to_frame()
+        # Adding lines where there is no flow, setting to 0
+        # (useful later for color attribution)
+        new_index = [(a,b) for a in range(n_clust) for b in range(5)]
+        flow = flow.reindex(new_index).fillna(0).reset_index()
+        flow = flow.rename(columns={i:'source', i+1:'target'})
+        # Adding to 'source' and 'target' an offset in order to correspond to
+        # the labels of the Sankey diagram nodes
+        flow['source'] = flow['source'].add(n_clust*i)
+        flow['target'] = flow['target'].add(n_clust*(i+1))
+        flow.columns = ['source', 'target', 'flows']
+        all_flows = pd.concat([all_flows, flow], ignore_index=True)
+
+    return all_flows
+
+''' SANKEY DIAGRAM | From the dataframe of the clusters labels of the customers for 
+each period of time, computes flow data and plots the Sankey diagram.
+'''
+
+import plotly.graph_objects as go
+
+def plot_Sankey_diagram(df_clust_1st_year, title):
+
+    # Computes the flows between the clusters of each period
+    all_flows = computing_flows_dataframe(df_clust_1st_year)
+
+    # Looping over periods and clusters labels to create Sankey labels
+    n_clust = df_clust_1st_year.nunique().max()
+    n_periods = df_clust_1st_year.shape[1]
+    labels = []
+    for i in range(n_periods):
+        for j in range(n_clust):
+            labels.append(f'c_{j}_p_{i}')
+
+    # Defining the list of colors for the nodes and for the flows
+    colors_nodes = [f'rgba({int(r*255)},{int(g*255)},{int(b*255)},{1})'\
+            for r,g,b in sns.color_palette('tab10')[:n_clust]]*n_clust*n_periods
+    # colors_flows = [[f'rgba({int(r*255)},{int(g*255)},{int(b*255)},{0.4})']*n_clust\
+    #         for r,g,b in sns.color_palette('tab10')[:n_clust]]*n_periods
+    # colors_flows = [col for subl in colors_flows for col in subl]
+
+    # Plotting the Sankey diagram
+    fig = go.Figure(data=[go.Sankey(valueformat = ".0f",
+                                    valuesuffix = "customers",
+                                    node = dict(pad = 10,
+                                                thickness = 20,
+                                                line = dict(color = "grey",
+                                                            width = 0.5),
+                                                label = labels,
+                                                color = colors_nodes),
+                                    link = dict(source = all_flows['source'],
+                                                target = all_flows['target'],
+                                                value = all_flows['flows'],
+                                                color = 'rgba(10,10,10,0.2)',
+                                                ))])
+
+    fig.update_layout(title_text=title, font_size=10)
+    fig.show()
+
+    return all_flows
+
+
+    ''' Takes the dictionnary of all the transformed dataframes of all the periods,
+then runs all the step of the stability analysis (KMeans) of the
+clustering through time:
+- Computes the cluster label of each customer of the 1st year for each period
+- Computes ARI (clusters obtained with first period vs other periods)
+- Computes flows between clusters
+- Plots Sankey diagram
+NB: two modes are available
+method1: uses one model fitted on the data of the first year only
+method2: refits the model on each new database
+'''
+
+def stability_through_time(dict_df_trans, n_clust, method1=True, method2=True):
+
+    if method1:
+        print("Method 1: Following customers of the first year with the \
+same model (using .predict)")
+        # Indexes of the customers of the first year
+        ind_1st_year = dict_df_trans[0][0].index
+        # Fitting the model on the database of the first year only
+        model = KMeans(n_clusters=n_clust, random_state=14)
+        model.fit(dict_df_trans[0][0])
+        # Computing the cluster label of each customer of the 1st year for each period
+        df_clust_1st_year = pd.DataFrame()
+        for k, v in dict_df_trans.items():
+            df_ = v[0] # database of period k
+            name_ = v[1] # name of period k
+            ser_clust = pd.Series(model.predict(df_),
+                                index=df_.index,
+                                name=f'{k}_clust_'+str(name_))
+            ser = ser_clust.loc[ind_1st_year]
+            df_clust_1st_year = pd.concat([df_clust_1st_year, ser.to_frame()],
+                                        axis=1)
+        nb_cust_1st_yr = df_clust_1st_year.shape[1]
+        # Computing the ARI between the clusters obtained with first period and
+        # each of the other periods (fitted once only)
+        ser_ARI_1_month = \
+            ARI_column_pairs(df_clust_1st_year,
+                            first_vs_others=True, print_opt=False)
+        # Plotting ARIs
+        fig = plt.figure(figsize=(5,3))
+        ax = fig.add_subplot(111)
+        ax.plot(range(1, 14), ser_ARI_1_month.values, '-or')
+        ax.set_xlabel('nb of extra months added')
+        ax.set_ylabel('ARI (1st year as ref)')
+        plt.title('Comparison of clusters labels (model fitted once)',
+                  fontweight='bold', fontsize=14)
+        plt.tight_layout()
+        plt.show()
+        # Computing flow data and plotting the Sankey diagram
+        title="Sankey Diagram showing flows of customers from one period\
+ to another - (model fitted once)"
+        all_flows = plot_Sankey_diagram(df_clust_1st_year, title=title)
+
+    if method2:
+        print("Method 2: Following customers of the first year with the \
+same model (using .predict)")
+        # Computing the cluster label of each customer for each period
+        # first initialisation
+        init_kmeans = 'k-means++'
+        df_clust_1st_year = pd.DataFrame()
+        for k, v in dict_df_trans.items():
+            df_ = v[0] # database of period k
+            name_ = v[1] # name of period k
+            n_init = 10 if k==0 else 1 # to avoid warning
+            # initialisation of a new model with init using centroids of the last period
+            model = KMeans(n_clusters=n_clust, init=init_kmeans,
+                        n_init=n_init, random_state=14)
+            # refitting the model for each period of time (with new customers)
+            model.fit(df_)
+            # computing cluster_centers for more accurate fitting on the next period
+            init_kmeans = model.cluster_centers_
+            # getting labels of all the customers of the period
+            ser_clust = pd.Series(model.labels_,
+                                index=df_.index,
+                                name=f'{k}_clust_'+str(name_))
+            # storing only labels of the customers of 1st year
+            ser = ser_clust.loc[ind_1st_year]
+            df_clust_1st_year = pd.concat([df_clust_1st_year, ser.to_frame()],
+                                        axis=1)
+        # Computing the ARI between the clusters obtained with first period and
+        # each of the other periods (refit at each time)
+        ser_ARI_1_month = ARI_column_pairs(df_clust_1st_year,
+                                first_vs_others=True, print_opt=False)
+        ser_ARI_1_month
+        # Plotting ARIs
+        fig = plt.figure(figsize=(5,3))
+        ax = fig.add_subplot(111)
+        ax.plot(range(1, 14), ser_ARI_1_month.values, '-ob')
+        ax.set_xlabel('nb of extra months added')
+        ax.set_ylabel('ARI (1st year as ref)')
+        plt.title('Comparison of clusters labels (model re-fitted each time)',
+                  fontweight='bold', fontsize=14)
+        plt.tight_layout()
+        plt.show()
+        # Computing flow data and plotting the Sankey diagram
+        title="Sankey Diagram showing flows of customers from one period to another\
+        - (model re-fitted each time)"
+        all_flows = plot_Sankey_diagram(df_clust_1st_year, title=title)
+
+
+''' Takes a dataset (df_expl) and the same dataset transformed prior
+to clustering.
+Then runs:
+- visualisation of the distribution of the features
+- evaluation of sampling relevancy
+- optimisation of the number of cluster (10 iterations)
+    o showing 4 clustering scores
+    o showing population ratio
+    o silhouette of each clusters
+    o initialisation stability ARI (20 iterations)
+-> asking the user for best number based on scores, population of clusters
+and initialisation stability
+-  cluster analysis
+    o visualization of the clusters on PCA, UMAP, t-SNE projections
+    o contingency tables
+    o relative difference
+'''
+
+def kmeans_clustering_all_steps(df, df_expl):
+    
+    ################## SHOWING CLUSTERING DATASET ##################
+    # Histograms of the untransformed data
+    print('ooooooooooooo- UNTRANSFORMED DATA (df_expl) -ooooooooooooo')
+    plot_histograms(df=df_expl, cols=df_expl.columns,
+                    figsize=(12,15), bins=30, layout=(9,4))
+    # Histograms of the transformed data
+    print('ooooooooooooo- TRANSFORMED DATA (df) -ooooooooooooo')
+    plot_histograms(df=df, cols=df.columns,
+                    figsize=(12,15), bins=30, color='pink', layout=(9,4))
+
+    ######################## SAMPLING RELEVANCY ########################
+    # Choosing a model for sampling relevancy
+    km_sampl = KMeans(n_clusters=6, random_state=14)
+    km_sampl.fit(df)
+    # Checking the ARI score between predictions of the "whole model"
+    # vs. the "sample model", n_iter times.
+    n_iter=10
+    li_n_samp = [100, 250, 500, 750, 1000, 2000, 3000,
+                4000, 5000, 7500, 10000, 20000, 50000]
+    # Bining the mean review score column for further stratification (sampling)
+    bin_mean_review = pd.cut(df_expl['mean_rev_score'], [0,1,2,3,4,5])
+    df_ARI_all_vs_sample_iter = \
+        check_ARI_through_sampling(km_sampl, df, li_n_samp, n_iter=n_iter,
+                                   stratify=bin_mean_review, print_opt=False)
+    # Plotting the results
+    fig, ax = plt.subplots(1)
+    fig.set_size_inches(13,5)
+    ax.errorbar(li_n_samp,
+                df_ARI_all_vs_sample_iter.mean(1).values,
+                yerr=2*(df_ARI_all_vs_sample_iter.std(1).values),
+                marker='o', color='blue')
+    ax.tick_params(rotation=45)
+    ax.set_xscale('log')
+    plt.xlabel("Number of rows in the sample")
+    plt.ylabel("ARI score")
+    plt.title(f"Pred. of model fitted with the whole dataset \
+    vs. pred. of model fitted with a sample ({n_iter}) iterations",
+    fontweight='bold')
+    plt.grid()
+    plt.show()
+
+    # Asking the user to enter the sample size
+    sampl_size = int(input("Please, choose a convenient sample size: "))
+    df_sampl, _ = train_test_split(df, train_size=sampl_size,
+                                   stratify=bin_mean_review)
+    ind_sampl = df_sampl.index
+
+    ############## OPTIMISATION OF THE NUMBER OF CLUSTERS ##############
+    # Reducing the size of the dataset
+    df = df.loc[ind_sampl]
+    df_expl = df_expl.loc[ind_sampl]
+    # Choosing the number of clusters range
+    list_n_clust = range(2,9)
+    # Computes and returns:
+    # - the aggregated results (mean, median, std) of the 4 scores
+    # - the list of the clusters predicted for each iter. and nb of clusters
+    # - the proportion (pct) of the clusters 
+    dict_pkl_A = {}
+    n_iter = 20
+    dict_scores_iter, dict_ser_clust_n_clust, dict_pop_perc_n_clust = \
+                        compute_clust_scores_nclust(df,
+                                                    list_n_clust=list_n_clust,
+                                                    n_iter=n_iter,
+                                                    return_pop=True)
+    # Plotting the 4 scores results              
+    plot_scores_vs_n_clust(dict_scores_iter, figsize=(15,3))
+    # Plotting the proportion of clusters (pies)
+    plot_clust_prop_pie_vs_nclust(dict_pop_perc_n_clust,
+                                list_n_clust, figsize=(15, 3))
+    # Computing and plotting the silhouette score of each cluster
+    silh_scores_vs_n_clust(df, n_clust=list_n_clust, proj='t-SNE',
+                        xlim=(-0.1,1), figsize=(8,4),
+                        palette='tab10')
+    # Checking for initialisation stability of the clusters
+    df_ARI_stab = pd.DataFrame()
+    for i in list_n_clust:
+        stab_init_kmeans = ARI_column_pairs(dict_ser_clust_n_clust[i],
+                                            first_vs_others=False,
+                                            print_opt=False)
+        df_ARI_stab = pd.concat([df_ARI_stab, stab_init_kmeans.to_frame()],
+                                axis=1)
+    # Boxplot of the ARI score on multiples iterations
+    df_ARI_stab.boxplot(color='red', vert=False)
+    plt.gcf().set_size_inches(7,2.5)
+    plt.title('Initialisation stability', fontweight='bold')
+    plt.show()
+
+    # Asking the user to enter the clusters number for the best model
+    n_clust = int(input("Please, choose the number of\
+     clusters for the best model: "))
+    
+    ########################### CLUSTERS ANALYSIS ###########################
+    # Visualisation of the best clusters
+    # fit the model on the whole dataframe
+    best_model = KMeans(n_clusters=n_clust, random_state=14)
+    best_model.fit(df)
+    ser_clust = pd.Series(data=best_model.labels_,
+                        index=df.index)
+    silh = silhouette_score(X=df, labels=ser_clust)
+    dav_bould = davies_bouldin_score(X=df, labels=ser_clust)
+    cal_harab = calinski_harabasz_score(X=df, labels=ser_clust)
+    distor = best_model.inertia_
+    print(f"scores of the best model : \n silh={silh}, \
+    cal_har={cal_harab}, dav_bould={dav_bould}, distor={distor}")
+    # ----- plotting the clusters on PCA, UMAP and t-SNE projections -----
+    fig = plt.figure(figsize=(12,3))
+    tab_proj = ['PCA', 'UMAP', 't-SNE']
+    for i, proj in enumerate(tab_proj,1):
+        ax = fig.add_subplot(1,len(tab_proj), i)
+        # plot only a sample, but using the model already fitted
+        plot_projection(df, model=best_model, proj=proj,
+                        fig=fig, ax=ax)
+    fig.suptitle("Projection of the clusters of the best model",
+                fontweight='bold', fontsize=14)
+    fig.tight_layout(rect=[0,0,1,0.92])
+    plt.show()
+    ## ----- Contingency tables -----
+    best_model.fit(df)
+    ser_clust = pd.Series(best_model.labels_,
+                            index=df.index,
+                            name='clust')
+    df_expl_quant = df_expl.select_dtypes(include=[np.number])
+    ser_bin = pd.qcut(df_expl_quant[df_expl_quant.columns[0]],
+                      [0,0.2,0.4,0.6,0.8,1],
+                      precision=2, duplicates='drop')
+    data_crosstab = pd.crosstab(ser_clust, ser_bin, margins = False)
+    contingency_tables(best_model, df, df_expl, palette="mako",
+                    cut_mode='quantile')
+    ## ----- Relative difference to the mean -----
+    clust_mean, orig_df_mean, rel_var = \
+        mean_deviation_clust(best_model, df, df_expl.loc[df.index],
+                             palette='seismic', figsize=(15,2))
+    ## ----- Snake plot -----
+    plot_snake(rel_var, thresh_dev=5)
+    ## ----- ANOVA and Kruskal-Wallis -----
+    # Computing ANOVA and Kruskal-Wallis for each features against clusters
+    Anova_Kruskal_df = pd.DataFrame()
+    for i, col in enumerate(df_expl.columns,1):
+        ser = test_distrib_clust(df_expl.assign(clust=ser_clust), col,
+                        'clust', print_opt=False)
+        Anova_Kruskal_df = pd.concat([Anova_Kruskal_df, ser.to_frame()], axis=1)
+    # Plotting the results
+    fig, ax = plt.subplots(1)
+    ser_anova = pd.Series([a for a,b in Anova_Kruskal_df.loc['ANOVA'].values],
+                          index=Anova_Kruskal_df.loc['ANOVA'].index,
+                          name='anova')
+    ser_kruskal = pd.Series([a for a,b in \
+                                Anova_Kruskal_df.loc['Kruskal-Wallis'].values],
+                            index=Anova_Kruskal_df.loc['Kruskal-Wallis'].index,
+                            name='kruskal')
+    df_ = pd.concat([ser_anova, ser_kruskal], axis=1).sort_values('anova')
+
+    (df_['anova'].sort_values()+1e-295).plot(marker='o', color='red',
+                                             label='ANOVA', ax=ax)
+    (df_['kruskal'].sort_values()+1e-295).plot(marker='o', color='blue',
+                                               label='Kruskal-Wallis', ax=ax)
+    ax.set_yscale('log')
+    ax.set_xticklabels(df_.index)
+    plt.xticks(rotation=45, ha='right')
+    plt.xticks(np.arange(ser_anova.shape[0]))
+    plt.title('p-value of the stat.hypothesis test\n (independence)',
+            fontweight='bold', fontsize='14')
+    plt.legend()
+    plt.show()
+    # Plotting boxplot of quantitative features for each cluster
+    # NB: col_order -> to keep the order of the lower p-value first
+    plot_boxplots_feat_vs_clust(df, df_expl, best_model, col_order=df_.index)
+    ## ----- Radar charts -----
+    ser_clust = best_model.labels_
+    # DataFrame with the means of each columns for each cluster
+    df_clust = df_expl.assign(clust=ser_clust)\
+        .reindex(columns=['clust']+list(df_expl.columns))
+    df_clust_mean = df_clust.groupby('clust').mean()
+    # Plotting the radar chart (untransformed data)
+    my_dpi = 96
+    fig = plt.figure(figsize=(750/my_dpi, 500/my_dpi),
+                    dpi=my_dpi)
+    for i, row in enumerate(df_clust_mean.index, 1):
+        ax = fig.add_subplot(3,3,i, polar=True)
+        plot_radar_chart(df=df_clust_mean, row=row,
+                         title='cluster '+str(row),
+                         color=my_palette(row),
+                         min_max_scaling=True, ax=ax)
+    plt.tight_layout(rect=[0,0,1,0.95])
+    ## ----- Decision Tree -----
+    thresh_dev = 0
+    sel_col = rel_var[np.abs(rel_var)>thresh_dev].dropna(how='all', axis=1).columns
+    sel_col = [col for col in sel_col if not 'cat_' in col]
+    df_dec_tree = df_clust[sel_col+['clust']]
+    X_tr, y_tr = df_dec_tree.iloc[:,:-1], df_dec_tree.iloc[:,-1]
+    # initializing and fitting the tree
+    tree = DecisionTreeClassifier(max_depth=6, random_state=14)
+    tree = tree.fit(X_tr, y_tr)
+    feature_importances = pd.Series(tree.feature_importances_,
+                                    index = df_dec_tree.iloc[:,:-1].columns,
+                                    name='Feature importance')\
+                                    .sort_values(ascending=False)
+    # plotting main feature importance
+    fig = plt.figure(figsize=(7, 3))
+    ax = fig.add_subplot(111)
+    n_feat = feature_importances.shape[0]
+    ax.set_ylabel('Feature importance', fontsize=12)
+    ax.set_title('Main feature importance (Decision Tree)',
+                 fontsize=14, fontweight='bold')
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    plt.bar(range(n_feat), feature_importances, color='b', edgecolor='k')
+    plt.xticks(range(n_feat), feature_importances.index,
+               ha='right', rotation=45, fontsize=12)
+    plt.show()
