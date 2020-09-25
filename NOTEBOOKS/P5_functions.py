@@ -787,7 +787,8 @@ def check_ARI_through_sampling(model, df, li_n_samp,
         list_samp_df = []
         for n in li_n_samp:
             df_sampl, _ = \
-                train_test_split(df, train_size=n, stratify=stratify)
+                train_test_split(df, train_size=n, stratify=stratify,
+                    random_state=14)
             list_samp_df.append(df_sampl)
 
         # Clustering labels obtained by fitting with samples
@@ -851,7 +852,7 @@ def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
 
         # Iterations of the same model (stability)
         for j in range(n_iter): 
-            km = KMeans(n_clusters=n_clust, n_jobs=-1)
+            km = KMeans(n_clusters=n_clust, n_jobs=-1) # random_state not fixed !!!!
             km.fit(df)
             ser_clust = pd.Series(data=km.labels_,
                                   index=df.index, 
@@ -1511,35 +1512,36 @@ method2: refits the model on each new database
 
 def stability_through_time(dict_df_trans, n_clust, method1=True, method2=True):
 
+    # Indexes of the customers of the first year
+    ind_1st_year = dict_df_trans[0][0].index
+
     if method1:
         print("Method 1: Following customers of the first year with the \
 same model (using .predict)")
-        # Indexes of the customers of the first year
-        ind_1st_year = dict_df_trans[0][0].index
         # Fitting the model on the database of the first year only
-        model = KMeans(n_clusters=n_clust, random_state=14)
-        model.fit(dict_df_trans[0][0])
-        # Computing the cluster label of each customer of the 1st year for each period
-        df_clust_1st_year = pd.DataFrame()
+        model_M1 = KMeans(n_clusters=n_clust, random_state=14)
+        model_M1.fit(dict_df_trans[0][0])
+        # Computing cluster label of each customer of 1st year for each period
+        df_clust_1st_year_M1 = pd.DataFrame()
         for k, v in dict_df_trans.items():
             df_ = v[0] # database of period k
             name_ = v[1] # name of period k
-            ser_clust = pd.Series(model.predict(df_),
-                                index=df_.index,
-                                name=f'{k}_clust_'+str(name_))
+            ser_clust = pd.Series(model_M1.predict(df_),
+                                  index=df_.index,
+                                  name=f'{k}_clust_'+str(name_))
             ser = ser_clust.loc[ind_1st_year]
-            df_clust_1st_year = pd.concat([df_clust_1st_year, ser.to_frame()],
+            df_clust_1st_year_M1 = pd.concat([df_clust_1st_year_M1,
+                                              ser.to_frame()],
                                         axis=1)
-        nb_cust_1st_yr = df_clust_1st_year.shape[1]
         # Computing the ARI between the clusters obtained with first period and
         # each of the other periods (fitted once only)
-        ser_ARI_1_month = \
-            ARI_column_pairs(df_clust_1st_year,
+        ser_ARI_1_month_M1 = \
+            ARI_column_pairs(df_clust_1st_year_M1,
                             first_vs_others=True, print_opt=False)
         # Plotting ARIs
         fig = plt.figure(figsize=(5,3))
         ax = fig.add_subplot(111)
-        ax.plot(range(1, 14), ser_ARI_1_month.values, '-or')
+        ax.plot(range(1, 14), ser_ARI_1_month_M1.values, '-or')
         ax.set_xlabel('nb of extra months added')
         ax.set_ylabel('ARI (1st year as ref)')
         plt.title('Comparison of clusters labels (model fitted once)',
@@ -1549,43 +1551,43 @@ same model (using .predict)")
         # Computing flow data and plotting the Sankey diagram
         title="Sankey Diagram showing flows of customers from one period\
  to another - (model fitted once)"
-        all_flows = plot_Sankey_diagram(df_clust_1st_year, title=title)
+        all_flows = plot_Sankey_diagram(df_clust_1st_year_M1, title=title)
 
     if method2:
         print("Method 2: Following customers of the first year with the \
-same model (using .predict)")
+model refitted for each period")
         # Computing the cluster label of each customer for each period
         # first initialisation
         init_kmeans = 'k-means++'
-        df_clust_1st_year = pd.DataFrame()
+        df_clust_1st_year_M2 = pd.DataFrame()
         for k, v in dict_df_trans.items():
             df_ = v[0] # database of period k
             name_ = v[1] # name of period k
             n_init = 10 if k==0 else 1 # to avoid warning
-            # initialisation of a new model with init using centroids of the last period
-            model = KMeans(n_clusters=n_clust, init=init_kmeans,
-                        n_init=n_init, random_state=14)
+            # init of a new model with init using centroids of the last period
+            model_M2 = KMeans(n_clusters=n_clust, init=init_kmeans,
+                              n_init=n_init, random_state=14)
             # refitting the model for each period of time (with new customers)
-            model.fit(df_)
-            # computing cluster_centers for more accurate fitting on the next period
-            init_kmeans = model.cluster_centers_
+            model_M2.fit(df_)
+            # computing cluster_centers for more accurate fit on next period
+            init_kmeans = model_M2.cluster_centers_
             # getting labels of all the customers of the period
-            ser_clust = pd.Series(model.labels_,
-                                index=df_.index,
-                                name=f'{k}_clust_'+str(name_))
+            ser_clust = pd.Series(model_M2.predict(df_),
+                                  index=df_.index,
+                                  name=f'{k}_clust_'+str(name_))
             # storing only labels of the customers of 1st year
             ser = ser_clust.loc[ind_1st_year]
-            df_clust_1st_year = pd.concat([df_clust_1st_year, ser.to_frame()],
+            df_clust_1st_year_M2 = pd.concat([df_clust_1st_year_M2,
+                                              ser.to_frame()],
                                         axis=1)
         # Computing the ARI between the clusters obtained with first period and
         # each of the other periods (refit at each time)
-        ser_ARI_1_month = ARI_column_pairs(df_clust_1st_year,
+        ser_ARI_1_month_M2 = ARI_column_pairs(df_clust_1st_year_M2,
                                 first_vs_others=True, print_opt=False)
-        ser_ARI_1_month
         # Plotting ARIs
         fig = plt.figure(figsize=(5,3))
         ax = fig.add_subplot(111)
-        ax.plot(range(1, 14), ser_ARI_1_month.values, '-ob')
+        ax.plot(range(1, 14), ser_ARI_1_month_M2.values, '-ob')
         ax.set_xlabel('nb of extra months added')
         ax.set_ylabel('ARI (1st year as ref)')
         plt.title('Comparison of clusters labels (model re-fitted each time)',
@@ -1593,10 +1595,9 @@ same model (using .predict)")
         plt.tight_layout()
         plt.show()
         # Computing flow data and plotting the Sankey diagram
-        title="Sankey Diagram showing flows of customers from one period to another\
-        - (model re-fitted each time)"
-        all_flows = plot_Sankey_diagram(df_clust_1st_year, title=title)
-
+        title="Sankey Diagram showing flows of customers from one period \
+to another - (model re-fitted each time)"
+        all_flows = plot_Sankey_diagram(df_clust_1st_year_M2, title=title)
 
 ''' Takes a dataset (df_expl) and the same dataset transformed prior
 to clustering.
@@ -1616,7 +1617,8 @@ and initialisation stability
     o relative difference
 '''
 
-def kmeans_clustering_all_steps(df, df_expl):
+
+def kmeans_clustering_all_steps(df, df_expl, stratify=None):
     
     ################## SHOWING CLUSTERING DATASET ##################
     # Histograms of the untransformed data
@@ -1638,10 +1640,11 @@ def kmeans_clustering_all_steps(df, df_expl):
     li_n_samp = [100, 250, 500, 750, 1000, 2000, 3000,
                 4000, 5000, 7500, 10000, 20000, 50000]
     # Bining the mean review score column for further stratification (sampling)
-    bin_mean_review = pd.cut(df_expl['mean_rev_score'], [0,1,2,3,4,5])
+    if stratify is None:
+        stratify = pd.cut(df_expl['mean_rev_score'], [0,1,2,3,4,5])
     df_ARI_all_vs_sample_iter = \
         check_ARI_through_sampling(km_sampl, df, li_n_samp, n_iter=n_iter,
-                                   stratify=bin_mean_review, print_opt=False)
+                                   stratify=stratify, print_opt=False)
     # Plotting the results
     fig, ax = plt.subplots(1)
     fig.set_size_inches(13,5)
@@ -1662,7 +1665,7 @@ def kmeans_clustering_all_steps(df, df_expl):
     # Asking the user to enter the sample size
     sampl_size = int(input("Please, choose a convenient sample size: "))
     df_sampl, _ = train_test_split(df, train_size=sampl_size,
-                                   stratify=bin_mean_review)
+                                   stratify=stratify, random_state=14)
     ind_sampl = df_sampl.index
 
     ############## OPTIMISATION OF THE NUMBER OF CLUSTERS ##############
@@ -1793,14 +1796,18 @@ def kmeans_clustering_all_steps(df, df_expl):
     df_clust_mean = df_clust.groupby('clust').mean()
     # Plotting the radar chart (untransformed data)
     my_dpi = 96
-    fig = plt.figure(figsize=(750/my_dpi, 500/my_dpi),
+    n_row = (n_clust+1)//2
+    fig = plt.figure(figsize=(n_row*350/my_dpi, 500/my_dpi),
                     dpi=my_dpi)
+    # Create a color palette:
+    my_palette = plt.cm.get_cmap("Dark2", n_clust)
+    # Loop to plot
     for i, row in enumerate(df_clust_mean.index, 1):
-        ax = fig.add_subplot(3,3,i, polar=True)
+        ax = fig.add_subplot(2,n_row,i, polar=True)
         plot_radar_chart(df=df_clust_mean, row=row,
-                         title='cluster '+str(row),
-                         color=my_palette(row),
-                         min_max_scaling=True, ax=ax)
+                        title='cluster '+str(row),
+                        color=my_palette(row),
+                        min_max_scaling=True, ax=ax)
     plt.tight_layout(rect=[0,0,1,0.95])
     ## ----- Decision Tree -----
     thresh_dev = 0
@@ -1827,3 +1834,4 @@ def kmeans_clustering_all_steps(df, df_expl):
     plt.xticks(range(n_feat), feature_importances.index,
                ha='right', rotation=45, fontsize=12)
     plt.show()
+    return n_clust
