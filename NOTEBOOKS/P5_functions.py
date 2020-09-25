@@ -1368,26 +1368,33 @@ class InductiveClusterer(BaseEstimator):
 
 ''' Plots boxplots of quantitative features for each cluster'''
 
-def plot_boxplots_feat_vs_clust(df, df_expl, model, col_order=None):
+def plot_dist_plots_feat_vs_clust(df, df_expl, model,
+                                  mode='box', col_order=None,
+                                  layout=(4,5), showfliers=False):
 
     fig = plt.figure(figsize=(12,12))
 
     model = model.fit(df) if not is_fitted(model) else model
-    ser_clust = pd.Series(model.labels_,
+    ser_clust = pd.Series(model.predict(df),
                         index=df.index,
                         name='clust')
 
     with sns.color_palette('dark'):
         col_order = df.columns if col_order is None else col_order
         for i, c in enumerate(col_order,1):
-            ax = fig.add_subplot(4,4,i)
-            sns.boxplot(data=df_expl.assign(clust=ser_clust),
-                        x='clust', y=c, width=0.5, ax=ax)
+            ax = fig.add_subplot(*layout,i)
+            if mode == 'violin':
+                sns.violinplot(data=df_expl.assign(clust=ser_clust),
+                            x='clust', y=c, width=0.5, ax=ax)
+            elif mode == 'box':
+                sns.boxplot(data=df_expl.assign(clust=ser_clust),
+                            x='clust', y=c, width=0.5, showfliers=showfliers, ax=ax)
             plt.grid()
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.suptitle('Dispersion of quantitative data through clusters',
                 fontsize=16, fontweight='bold')
     plt.show()
+
 
 ''' Plots the Snake plot from a dataframe ('rel_var') of the relative
 deviation of the mean (pct) of the features (columns) for each cluster (index)
@@ -1616,7 +1623,7 @@ and initialisation stability
     o contingency tables
     o relative difference
 '''
-
+from sklearn.tree import DecisionTreeClassifier
 
 def kmeans_clustering_all_steps(df, df_expl, stratify=None):
     
@@ -1787,7 +1794,7 @@ def kmeans_clustering_all_steps(df, df_expl, stratify=None):
     plt.show()
     # Plotting boxplot of quantitative features for each cluster
     # NB: col_order -> to keep the order of the lower p-value first
-    plot_boxplots_feat_vs_clust(df, df_expl, best_model, col_order=df_.index)
+    plot_dist_plots_feat_vs_clust(df, df_expl, best_model, col_order=df_.index)
     ## ----- Radar charts -----
     ser_clust = best_model.labels_
     # DataFrame with the means of each columns for each cluster
