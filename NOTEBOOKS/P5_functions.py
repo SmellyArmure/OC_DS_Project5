@@ -1299,21 +1299,34 @@ Values are scaled using a MinMaxScaler'''
 
 from sklearn.preprocessing import MinMaxScaler
 from math import pi
+import numpy as np
 
-def plot_radar_chart(df, row, title, color, min_max_scaling=False, ax=None):
 
-    df_copy = df.copy('deep')
+
+def plot_radar_chart(df_clust_mean, row, ser_mean=None, ser_median=None,
+                     title=None, color='red', min_max_scaling=False, ax=None):
+
+    df_ = df_clust_mean.copy('deep')
     if min_max_scaling:
         min_max = MinMaxScaler()
-        df_copy = pd.DataFrame(min_max.fit_transform(df_copy),
-                               index=df_copy.index,
-                               columns=df_copy.columns)
-    df_ = df_copy.reset_index()
-    categories=list(df)
+        df_ = pd.DataFrame(min_max.fit_transform(df_.values),
+                               index=df_.index,
+                               columns=df_.columns)
+        if ser_mean is not None:
+            df_temp = df_clust_mean.append(ser_mean.rename('means'))
+            ser_mean = pd.Series(data=min_max.fit_transform(df_temp)[-1:]\
+                                 .flatten().tolist())
+        if ser_median is not None:
+            df_temp = df_clust_mean.append(ser_median.rename('means'))
+            ser_median = pd.Series(data=min_max.fit_transform(df_temp)[-1:]\
+                                 .flatten().tolist())
+    
+    categories=list(df_)
+    df_ = df_.reset_index()
     n_vars = len(categories)
     
-    angles = [n / float(n_vars) * 2 * pi for n in range(n_vars)]
-    angles += angles[:1] # "complete the loop"
+    angles = np.array([n / float(n_vars) * 2 * pi for n in range(n_vars)])
+    angles = np.append(angles, angles[:1]) # "complete the loop"
     
     ax = plt.subplot(1,1,1, polar=True) if ax is None else ax
     
@@ -1324,16 +1337,27 @@ def plot_radar_chart(df, row, title, color, min_max_scaling=False, ax=None):
     plt.xticks(angles[:-1], categories, color='grey', size=8)
     
     ax.set_rlabel_position(0)
-    plt.yticks(color="grey", size=7)# [10,20,30], ["10","20","30"], 
-    # plt.ylim(0,40)
+    plt.yticks(color="grey", size=7)
     
-    values=df_.loc[row].drop('clust').values.flatten().tolist() # 
-    values += values[:1]
+    values = df_.loc[row].drop('clust').values
+    values = np.append(values, values[:1])
+
     ax.plot(angles, values, color=color, linewidth=2, linestyle='solid')
-    ax.fill(angles, values, color=color, alpha=0.4)
+
+    if ser_mean is not None:
+        mean_values = np.append(ser_mean.values, ser_mean.values[:1])
+        ax.plot(angles, mean_values, color='k', linewidth=1,
+                linestyle='dashed', label='mean')
+    if ser_median is not None:
+        median_values = np.append(ser_median.values, ser_median.values[:1])
+        ax.plot(angles, median_values, color='k', linewidth=1,
+                linestyle='dotted', label='median')
     
-    plt.title(title, size=11, color=color, y=1.1,
-              fontweight='bold')
+    ax.fill(angles, values, color=color, alpha=0.4)
+
+    if title is not None: plt.title(title, size=11, color=color,
+                                    y=1.1, fontweight='bold')
+
 
 
 ''' Class that join a clustering algorithm to a classification algorithm
@@ -1369,10 +1393,10 @@ class InductiveClusterer(BaseEstimator):
 ''' Plots boxplots of quantitative features for each cluster'''
 
 def plot_dist_plots_feat_vs_clust(df, df_expl, model,
-                                  mode='box', col_order=None,
-                                  layout=(4,5), showfliers=False):
+                                  mode='box', col_order=None, layout=(4,5),
+                                  figsize=(12,12), showfliers=False):
 
-    fig = plt.figure(figsize=(12,12))
+    fig = plt.figure(figsize=figsize)
 
     model = model.fit(df) if not is_fitted(model) else model
     ser_clust = pd.Series(model.predict(df),
