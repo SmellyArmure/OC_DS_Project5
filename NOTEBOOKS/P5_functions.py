@@ -444,14 +444,15 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
     mask_time = df_orders_mod['order_purchase_timestamp'].between(t_min, t_max)
     df = df_orders_mod[mask_time].reset_index()
 
-    def most_freq_cat(x): return x if x.size == 1 else x.value_counts().idxmax()
-
     # Dictionary for the aggregation of the main values and times
     agg_dict_1 = {
-                # 'cust_zipcode': ('customer_zip_code_prefix', np.max),
-                # 'cust_city': ('customer_city', np.max),
-                # 'cust_state': ('customer_state', np.max),
+                'cust_lat': ('cust_lat', np.max),
+                'cust_long': ('cust_long', np.max),
                 'cust_region': ('cust_region', np.max),
+                'order_status': ('order_status', np.max),
+                'main_prod_categ': ('main_prod_categ', np.max),
+                'cum_paytype': ('cum_paytype', np.max),
+                # the columns above will be replaced if necessary by values of the last commands (see below)
                 'tot_nb_ord': ('order_id', np.size),
                 'tot_nb_deliv_ord': ('delivered', np.sum),
                 'time_since_last_purch': ('order_purchase_timestamp',
@@ -475,8 +476,6 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
                 'mean_rev_score': ('review_score', np.mean),
                 'mean_comment_length': ('review_comment_length', np.mean),
                 'tot_comment_length': ('review_comment_length', np.sum),
-                # 'cum_paytype': ('cum_paytype', most_freq_cat) ,
-                # 'main_prod_categ': ('main_prod_categ', most_freq_cat),
                 }
     # Dictionary for the aggreagation of dummy columns (payment and categories)
     cat_cols = list(df.columns[df.columns.str.contains('cat_')])
@@ -488,6 +487,23 @@ def create_agg_cust_df(df_orders, t_min=None, t_max=None): # t_min not rally use
 
     # Aggregate the orders of each unique customer
     df_cust = df.groupby('customer_unique_id').agg(**agg_dict)
+
+    # Performs custom aggregation for columns: 'cust_lat', 'cust_long',
+    # 'cust_region','order_status', 'main_prod_categ', 'cum_paytype' :
+    # for each group of duplicates take the most recent order
+    dup_ord = df.duplicated(subset=['customer_unique_id'], keep=False)
+    gb = df[dup_ord].reset_index().groupby('customer_unique_id')
+    ord_id_list = []
+    for k, sub_df in gb:
+        idxmax = np.argmax(sub_df['order_purchase_timestamp'])
+        ord_id_list.append(sub_df.iloc[idxmax][['order_id']][0])
+    df_custom_agg = df[df['order_id'].isin(ord_id_list)]\
+            [['customer_unique_id', 'cust_lat', 'cust_long', 'cust_region',
+              'order_status', 'main_prod_categ', 'cum_paytype']]\
+              .set_index('customer_unique_id')
+
+    # Merge with custom aggregation
+    df_cust.loc[df_custom_agg.index, df_custom_agg.columns] = df_custom_agg
 
     df_cust['cust_region'] = df_cust['cust_region'].astype('object')
 
