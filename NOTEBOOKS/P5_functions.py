@@ -850,15 +850,25 @@ respectively:
 - and the pies of the clusters ratio,
  based on the dictionnaries provided by compute_clust_scores_nclust"""
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 
-def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
-                                 n_iter=10, return_pop=False):
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.ensemble import RandomForestClassifier
+
+def compute_clust_scores_nclust(df, df_fit=None, model=None, n_iter=10, inertia=True,
+                                list_n_clust=range(2,8), return_pop=False):
+#### ATTENTION AU CAS PAR CAS POUR LES MODELES AUTRES QUE KMEANS
 
     dict_pop_perc_n_clust = {}
     dict_ser_clust_n_clust = {}
     dict_scores_iter = {}
+
+    df_fit = df if df_fit is None else df_fit
+    km_default = True if model is None else False
+    ahc = True if model == 'ahc' else False
+    gmm = True if model == 'gmm' else False
 
     # --- Looping on the number of clusters to compute the scores
     for i, n_clust in enumerate(list_n_clust,1):
@@ -867,11 +877,24 @@ def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
         pop_perc_iter, ser_clust_iter = pd.DataFrame(), pd.DataFrame()
 
         # Iterations of the same model (stability)
-        for j in range(n_iter): 
-            km = KMeans(n_clusters=n_clust, n_jobs=-1) # random_state not fixed !!!!
-            km.fit(df)
-            ser_clust = pd.Series(data=km.labels_,
-                                  index=df.index, 
+        for j in range(n_iter):
+            if km_default:
+                model = KMeans(n_clusters=n_clust,
+                               random_state=np.random.randint(100))
+            elif ahc:
+                ahc = AgglomerativeClustering(n_clusters=n_clust)
+                clf = RandomForestClassifier(random_state=np.random.randint(100))
+                model = InductiveClusterer(ahc, clf)
+            elif gmm:
+                # reinitialisation of the random state (gmm)
+                model = GaussianMixture(n_components=n_clust,
+                                        covariance_type='spherical',
+                                        random_state=np.random.randint(100))
+            else:
+                print("ERROR: unknown model asked")
+            model.fit(df_fit)
+            ser_clust = pd.Series(data=model.predict(df),
+                                  index=df.index,
                                   name="iter_"+str(j))
             ser_clust_iter = pd.concat([ser_clust_iter, ser_clust.to_frame()],
                                        axis=1)
@@ -888,7 +911,7 @@ def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
             silh.append(silhouette_score(X=df, labels=ser_clust))
             dav_bould.append(davies_bouldin_score(X=df, labels=ser_clust))
             cal_harab.append(calinski_harabasz_score(X=df, labels=ser_clust))
-            distor.append(km.inertia_)
+            if inertia: distor.append(model.inertia_)
 
         dict_ser_clust_n_clust[n_clust] = ser_clust_iter
 
@@ -898,9 +921,11 @@ def compute_clust_scores_nclust(df, list_n_clust=range(2,8),
 
         # Dataframe of the results on iterations
         scores_iter = pd.DataFrame({'Silhouette': silh,
-                                 'Davies_Bouldin': dav_bould,
-                                 'Calinsky_Harabasz': cal_harab,
-                                 'Distortion': distor})
+                                    'Davies_Bouldin': dav_bould,
+                                    'Calinsky_Harabasz': cal_harab,
+                                    })
+        if inertia:
+            scores_iter['Distortion'] = distor
         dict_scores_iter[n_clust] = scores_iter
 
     if return_pop:
